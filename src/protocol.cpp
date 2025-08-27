@@ -30,7 +30,10 @@ CMessageHeader::CMessageHeader(const char* pszCommand, unsigned int nMessageSize
 {
     memcpy(pchMessageStart, Params().MessageStart(), MESSAGE_START_SIZE);
     memset(pchCommand, 0, sizeof(pchCommand));
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
     strncpy(pchCommand, pszCommand, COMMAND_SIZE);
+#pragma GCC diagnostic pop
     nMessageSize = nMessageSizeIn;
     nChecksum = 0;
 }

@@ -13,7 +13,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/foreach.hpp>
 #include <boost/iostreams/concepts.hpp>
@@ -264,7 +264,7 @@ Object JSONRPCError(int code, const string& message)
  boost::filesystem::path GetAuthCookieFile()
  {
      boost::filesystem::path path(GetArg("-rpccookiefile", COOKIEAUTH_FILE));
-     if (!path.is_complete()) path = GetDataDir() / path;
+     if (!path.is_absolute()) path = GetDataDir() / path;
      return path;
  }
 

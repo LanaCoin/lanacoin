@@ -27,7 +27,6 @@
 #include <signal.h>
 #endif
 
-
 using namespace std;
 using namespace boost;
 
@@ -453,7 +452,9 @@ bool AppInit2(boost::thread_group& threadGroup)
     std::string strWalletFileName = GetArg("-wallet", "wallet.dat");
 
     // strWalletFileName must be a plain filename without a directory
-    if (strWalletFileName != boost::filesystem::basename(strWalletFileName) + boost::filesystem::extension(strWalletFileName))
+    boost::filesystem::path walletPath(strWalletFileName);
+
+    if (strWalletFileName != walletPath.stem().string() + walletPath.extension().string())
         return InitError(strprintf(_("Wallet %s resides outside data directory %s."), strWalletFileName, strDataDir));
 #endif
     // Make sure only a single Bitcoin process is using the data directory.

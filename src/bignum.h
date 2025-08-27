@@ -625,7 +625,9 @@ public:
      */
     bool isPrime(const int checks=BN_prime_checks) const {
         CAutoBN_CTX pctx;
-        int ret = BN_is_prime_ex(bn, checks, pctx, NULL);
+
+        int ret = BN_check_prime(bn, pctx, NULL);
+
         if(ret < 0){
             throw bignum_error("CBigNum::isPrime :BN_is_prime");
         }

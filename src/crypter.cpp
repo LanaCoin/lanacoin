@@ -62,7 +62,7 @@ bool CCrypter::Encrypt(const CKeyingMaterial& vchPlaintext, std::vector<unsigned
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
     EVP_CIPHER_CTX ctx;
 #else
-    EVP_CIPHER_CTX *ctx;
+    EVP_CIPHER_CTX *ctx = NULL;
 #endif
 
     bool fOk = true;
@@ -101,7 +101,7 @@ bool CCrypter::Decrypt(const std::vector<unsigned char>& vchCiphertext, CKeyingM
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
     EVP_CIPHER_CTX ctx;
 #else
-    EVP_CIPHER_CTX *ctx;
+    EVP_CIPHER_CTX *ctx = NULL;
 #endif
 
     bool fOk = true;

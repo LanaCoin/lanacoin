@@ -4,11 +4,13 @@
 #define PBKDF2_H
 
 #include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <string.h>
 #include <stdint.h>
 
 typedef struct HMAC_SHA256Context {
-    SHA256_CTX ictx;
-    SHA256_CTX octx;
+    EVP_MD_CTX *ictx;
+    EVP_MD_CTX *octx;
 } HMAC_SHA256_CTX;
 
 void

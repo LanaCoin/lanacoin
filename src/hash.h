@@ -8,31 +8,72 @@
 #include "uint256.h"
 #include "serialize.h"
 
-#include <openssl/sha.h>
-#include <openssl/ripemd.h>
+#include <openssl/evp.h>
+#include <string.h>
+
+inline int sha256_hash(const void *data, size_t len, unsigned char *out) {
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return 0;
+
+    unsigned int digest_len = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL)
+          && EVP_DigestUpdate(ctx, data, len)
+          && EVP_DigestFinal_ex(ctx, out, &digest_len);
+
+    EVP_MD_CTX_free(ctx);
+    return ok && digest_len == 32;
+}
+
+inline int ripemd160_hash(const void *data, size_t len, unsigned char *out) {
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return 0;
+
+    unsigned int digest_len = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_ripemd160(), NULL)
+          && EVP_DigestUpdate(ctx, data, len)
+          && EVP_DigestFinal_ex(ctx, out, &digest_len);
+
+    EVP_MD_CTX_free(ctx);
+    return ok && digest_len == 20;
+}
+
+inline int sha1_hash(const void *data, size_t len, unsigned char *out) {
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return 0;
+
+    unsigned int digest_len = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha1(), NULL)
+          && EVP_DigestUpdate(ctx, data, len)
+          && EVP_DigestFinal_ex(ctx, out, &digest_len);
+
+    EVP_MD_CTX_free(ctx);
+    return ok && digest_len == 20;
+}
 
 template<typename T1>
 inline uint256 Hash(const T1 pbegin, const T1 pend)
 {
     static unsigned char pblank[1];
     uint256 hash1;
-    SHA256((pbegin == pend ? pblank : (unsigned char*)&pbegin[0]), (pend - pbegin) * sizeof(pbegin[0]), (unsigned char*)&hash1);
+
+    sha256_hash((pbegin == pend ? pblank : (unsigned char*)&pbegin[0]), (pend - pbegin) * sizeof(pbegin[0]), (unsigned char*)&hash1);
     uint256 hash2;
-    SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+    sha256_hash((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
 }
 
 class CHashWriter
 {
 private:
-    SHA256_CTX ctx;
+    EVP_MD_CTX *ctx;
 
 public:
     int nType;
     int nVersion;
 
     void Init() {
-        SHA256_Init(&ctx);
+        ctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
     }
 
     CHashWriter(int nTypeIn, int nVersionIn) : nType(nTypeIn), nVersion(nVersionIn) {
@@ -40,16 +81,20 @@ public:
     }
 
     CHashWriter& write(const char *pch, size_t size) {
-        SHA256_Update(&ctx, pch, size);
+        EVP_DigestUpdate(ctx, pch, size);
         return (*this);
     }
 
     // invalidates the object
     uint256 GetHash() {
         uint256 hash1;
-        SHA256_Final((unsigned char*)&hash1, &ctx);
+        unsigned int digest_len = 0;
+        EVP_DigestFinal_ex(ctx, (unsigned char*)&hash1, &digest_len);
         uint256 hash2;
-        SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+        sha256_hash((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+        if (ctx) {
+            EVP_MD_CTX_free(ctx);
+        }
         return hash2;
     }
 
@@ -68,13 +113,17 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end,
 {
     static unsigned char pblank[1];
     uint256 hash1;
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    SHA256_Update(&ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
-    SHA256_Update(&ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
-    SHA256_Final((unsigned char*)&hash1, &ctx);
+    unsigned int digest_len = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
+    EVP_DigestUpdate(ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
+    EVP_DigestFinal_ex(ctx, (unsigned char*)&hash1, &digest_len);
+    EVP_MD_CTX_free(ctx);
+
     uint256 hash2;
-    SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+    sha256_hash((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+
     return hash2;
 }
 
@@ -85,14 +134,18 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end,
 {
     static unsigned char pblank[1];
     uint256 hash1;
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    SHA256_Update(&ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
-    SHA256_Update(&ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
-    SHA256_Update(&ctx, (p3begin == p3end ? pblank : (unsigned char*)&p3begin[0]), (p3end - p3begin) * sizeof(p3begin[0]));
-    SHA256_Final((unsigned char*)&hash1, &ctx);
+    unsigned int digest_len = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
+    EVP_DigestUpdate(ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
+    EVP_DigestUpdate(ctx, (p3begin == p3end ? pblank : (unsigned char*)&p3begin[0]), (p3end - p3begin) * sizeof(p3begin[0]));
+    EVP_DigestFinal_ex(ctx, (unsigned char*)&hash1, &digest_len);
+    EVP_MD_CTX_free(ctx);
+
     uint256 hash2;
-    SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+    sha256_hash((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+
     return hash2;
 }
 
@@ -109,9 +162,9 @@ inline uint160 Hash160(const T1 pbegin, const T1 pend)
 {
     static unsigned char pblank[1];
     uint256 hash1;
-    SHA256((pbegin == pend ? pblank : (unsigned char*)&pbegin[0]), (pend - pbegin) * sizeof(pbegin[0]), (unsigned char*)&hash1);
+    sha256_hash((pbegin == pend ? pblank : (unsigned char*)&pbegin[0]), (pend - pbegin) * sizeof(pbegin[0]), (unsigned char*)&hash1);
     uint160 hash2;
-    RIPEMD160((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+    ripemd160_hash((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
 }
 
@@ -122,8 +175,8 @@ inline uint160 Hash160(const std::vector<unsigned char>& vch)
 
 typedef struct
 {
-    SHA512_CTX ctxInner;
-    SHA512_CTX ctxOuter;
+    EVP_MD_CTX *ctxInner;
+    EVP_MD_CTX *ctxOuter;
 } HMAC_SHA512_CTX;
 
 int HMAC_SHA512_Init(HMAC_SHA512_CTX *pctx, const void *pkey, size_t len);

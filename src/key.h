@@ -201,6 +201,8 @@ public:
         memcpy(vch, secret.vch, sizeof(vch));
     }
 
+    CKey& operator=(const CKey&) = default;
+
     // Destructor (again necessary because of memlocking).
     ~CKey() {
         UnlockObject(vch);

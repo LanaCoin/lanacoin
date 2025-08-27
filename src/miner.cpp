@@ -38,20 +38,21 @@ static const unsigned int pSHA256InitState[8] =
 
 void SHA256Transform(void* pstate, void* pinput, const void* pinit)
 {
-    SHA256_CTX ctx;
-    unsigned char data[64];
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return;
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
 
-    SHA256_Init(&ctx);
+    unsigned char data[64];
 
     for (int i = 0; i < 16; i++)
         ((uint32_t*)data)[i] = ByteReverse(((uint32_t*)pinput)[i]);
 
     for (int i = 0; i < 8; i++)
-        ctx.h[i] = ((uint32_t*)pinit)[i];
+        ((uint32_t*)EVP_MD_CTX_md_data(ctx))[i] = ((uint32_t*)pinit)[i];
 
-    SHA256_Update(&ctx, data, sizeof(data));
+    EVP_DigestUpdate(ctx, data, sizeof(data));
     for (int i = 0; i < 8; i++)
-        ((uint32_t*)pstate)[i] = ctx.h[i];
+        ((uint32_t*)pstate)[i] = ((uint32_t*)EVP_MD_CTX_md_data(ctx))[i];
 }
 
 // Some explaining would be appreciated
@@ -414,7 +415,10 @@ void FormatHashBuffers(CBlock* pblock, char* pmidstate, char* pdata, char* phash
         unsigned char pchPadding1[64];
     }
     tmp;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
     memset(&tmp, 0, sizeof(tmp));
+#pragma GCC diagnostic pop
 
     tmp.block.nVersion       = pblock->nVersion;
     tmp.block.hashPrevBlock  = pblock->hashPrevBlock;
