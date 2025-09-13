@@ -18,6 +18,10 @@
 
 #include "key.h"
 
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+#error "OpenSSL 1 has reached EOL and is not supported anymore, please upgrade to OpenSSL 3"
+#endif
+
 // anonymous namespace with local implementation code (OpenSSL interaction)
 namespace {
 
