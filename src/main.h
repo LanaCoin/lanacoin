@@ -23,20 +23,48 @@ class CNode;
 class CReserveKey;
 class CWallet;
 
-/** The maximum allowed size for a serialized block, in bytes (network rule) */
+/** The maximum allowed size for a serialized block, in bytes (network rule) - pre-hardfork */
 static const unsigned int MAX_BLOCK_SIZE = 5000000;
-/** The maximum size for mined blocks */
+/** The maximum size for mined blocks - pre-hardfork */
 static const unsigned int MAX_BLOCK_SIZE_GEN = MAX_BLOCK_SIZE/2;
-/** The maximum size for transactions we're willing to relay/mine **/
+/** The maximum size for transactions we're willing to relay/mine - pre-hardfork **/
 static const unsigned int MAX_STANDARD_TX_SIZE = MAX_BLOCK_SIZE_GEN/5;
-/** The maximum allowed number of signature check operations in a block (network rule) */
+/** The maximum allowed number of signature check operations in a block (network rule) - pre-hardfork */
 static const unsigned int MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50;
 /** Maxiumum number of signature check operations in an IsStandard() P2SH script */
 static const unsigned int MAX_P2SH_SIGOPS = 15;
-/** The maximum number of sigops we're willing to relay/mine in a single tx */
+/** The maximum number of sigops we're willing to relay/mine in a single tx - pre-hardfork */
 static const unsigned int MAX_TX_SIGOPS = MAX_BLOCK_SIGOPS/5;
-/** The maximum number of orphan transactions kept in memory */
+/** The maximum number of orphan transactions kept in memory - pre-hardfork */
 static const unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
+
+/** Hardfork activation height for block size increase to 64 MB */
+static const int HARDFORK_BLOCK_SIZE_HEIGHT = 1111111;
+
+/** Post-hardfork block size limits (64 MB) */
+static const unsigned int MAX_BLOCK_SIZE_V2 = 64000000;
+static const unsigned int MAX_BLOCK_SIZE_GEN_V2 = MAX_BLOCK_SIZE_V2/2;
+static const unsigned int MAX_STANDARD_TX_SIZE_V2 = MAX_BLOCK_SIZE_GEN_V2/5;
+static const unsigned int MAX_BLOCK_SIGOPS_V2 = MAX_BLOCK_SIZE_V2/50;
+static const unsigned int MAX_TX_SIGOPS_V2 = MAX_BLOCK_SIGOPS_V2/5;
+static const unsigned int MAX_ORPHAN_TRANSACTIONS_V2 = MAX_BLOCK_SIZE_V2/100;
+
+/** Height-aware helper functions for block size limits (hardfork at block 1,111,111) */
+inline unsigned int GetMaxBlockSize(int nHeight) {
+    return nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT ? MAX_BLOCK_SIZE_V2 : MAX_BLOCK_SIZE;
+}
+inline unsigned int GetMaxBlockSizeGen(int nHeight) {
+    return nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT ? MAX_BLOCK_SIZE_GEN_V2 : MAX_BLOCK_SIZE_GEN;
+}
+inline unsigned int GetMaxStandardTxSize(int nHeight) {
+    return nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT ? MAX_STANDARD_TX_SIZE_V2 : MAX_STANDARD_TX_SIZE;
+}
+inline unsigned int GetMaxBlockSigops(int nHeight) {
+    return nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT ? MAX_BLOCK_SIGOPS_V2 : MAX_BLOCK_SIGOPS;
+}
+inline unsigned int GetMaxTxSigops(int nHeight) {
+    return nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT ? MAX_TX_SIGOPS_V2 : MAX_TX_SIGOPS;
+}
 /** Default for -maxorphanblocksmib, maximum number of memory to keep orphan blocks */
 static const unsigned int DEFAULT_MAX_ORPHAN_BLOCKS = 40;
 /** The maximum number of entries in an 'inv' protocol message */

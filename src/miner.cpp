@@ -136,10 +136,15 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
     // Add our coinbase tx as first transaction
     pblock->vtx.push_back(txNew);
 
+    // Use height-aware block size limits (hardfork at block 1,111,111)
+    unsigned int nActiveMaxBlockSize = GetMaxBlockSize(nHeight);
+    unsigned int nActiveMaxBlockSizeGen = GetMaxBlockSizeGen(nHeight);
+    unsigned int nActiveMaxBlockSigops = GetMaxBlockSigops(nHeight);
+
     // Largest block you're willing to create:
-    unsigned int nBlockMaxSize = GetArg("-blockmaxsize", MAX_BLOCK_SIZE_GEN/2);
+    unsigned int nBlockMaxSize = GetArg("-blockmaxsize", nActiveMaxBlockSizeGen/2);
     // Limit to betweeen 1K and MAX_BLOCK_SIZE-1K for sanity:
-    nBlockMaxSize = std::max((unsigned int)1000, std::min((unsigned int)(MAX_BLOCK_SIZE-1000), nBlockMaxSize));
+    nBlockMaxSize = std::max((unsigned int)1000, std::min((unsigned int)(nActiveMaxBlockSize-1000), nBlockMaxSize));
 
     // How much of the block should be dedicated to high-priority transactions,
     // included regardless of the fees they pay
@@ -270,7 +275,7 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
 
             // Legacy limits on sigOps:
             unsigned int nTxSigOps = GetLegacySigOpCount(tx);
-            if (nBlockSigOps + nTxSigOps >= MAX_BLOCK_SIGOPS)
+            if (nBlockSigOps + nTxSigOps >= nActiveMaxBlockSigops)
                 continue;
 
             // Timestamp limit
@@ -307,7 +312,7 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
                 continue;
 
             nTxSigOps += GetP2SHSigOpCount(tx, mapInputs);
-            if (nBlockSigOps + nTxSigOps >= MAX_BLOCK_SIGOPS)
+            if (nBlockSigOps + nTxSigOps >= nActiveMaxBlockSigops)
                 continue;
 
             // Note that flags: we don't want to set mempool/IsStandard()

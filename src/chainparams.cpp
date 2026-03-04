@@ -96,6 +96,7 @@ public:
         convertSeed6(vFixedSeeds, pnSeed6_main, ARRAYLEN(pnSeed6_main));
 
         nLastPOWBlock = 750000;
+        nHardForkBlock = 1111111; // Block size increase to 64 MB
     }
 
     virtual const CBlock& GenesisBlock() const { return genesis; }
@@ -151,6 +152,7 @@ public:
         convertSeed6(vFixedSeeds, pnSeed6_test, ARRAYLEN(pnSeed6_test));
 
         nLastPOWBlock = 0x7fffffff;
+        nHardForkBlock = 1111111; // Same hardfork height as mainnet
     }
     virtual Network NetworkID() const { return CChainParams::TESTNET; }
 };
@@ -175,7 +177,7 @@ public:
         hashGenesisBlock = genesis.GetHash();
         nDefaultPort = 27506;
         strDataDir = "regtest";
-
+        nHardForkBlock = 0; // Immediate activation for regtest
 
         assert(hashGenesisBlock == uint256("0x0eede8c987624337822f251729bfb79f8b5b0c069eedb72d0eb9fdb35780450b"));
 

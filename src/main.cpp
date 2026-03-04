@@ -593,12 +593,15 @@ int64_t GetMinFee(const CTransaction& tx, unsigned int nBlockSize, enum GetMinFe
     unsigned int nNewBlockSize = nBlockSize + nBytes;
     int64_t nMinFee = (1 + (int64_t)nBytes / 1000) * nBaseFee;
 
+    // Use height-aware block generation size limit
+    unsigned int nActiveMaxBlockSizeGen = GetMaxBlockSizeGen(nBestHeight);
+
     // Raise the price as the block approaches full
-    if (nBlockSize != 1 && nNewBlockSize >= MAX_BLOCK_SIZE_GEN/2)
+    if (nBlockSize != 1 && nNewBlockSize >= nActiveMaxBlockSizeGen/2)
     {
-        if (nNewBlockSize >= MAX_BLOCK_SIZE_GEN)
+        if (nNewBlockSize >= nActiveMaxBlockSizeGen)
             return MAX_MONEY;
-        nMinFee *= MAX_BLOCK_SIZE_GEN / (MAX_BLOCK_SIZE_GEN - nNewBlockSize);
+        nMinFee *= nActiveMaxBlockSizeGen / (nActiveMaxBlockSizeGen - nNewBlockSize);
     }
 
     if (!MoneyRange(nMinFee))
@@ -680,10 +683,11 @@ bool AcceptToMemoryPool(CTxMemPool& pool, CTransaction &tx, bool fLimitFree,
         // merely non-standard transaction.
         unsigned int nSigOps = GetLegacySigOpCount(tx);
         nSigOps += GetP2SHSigOpCount(tx, mapInputs);
-        if (nSigOps > MAX_TX_SIGOPS)
+        unsigned int nActiveMaxTxSigops = GetMaxTxSigops(nBestHeight);
+        if (nSigOps > nActiveMaxTxSigops)
             return tx.DoS(0,
                           error("AcceptToMemoryPool : too many sigops %s, %d > %d",
-                                hash.ToString(), nSigOps, MAX_TX_SIGOPS));
+                                hash.ToString(), nSigOps, nActiveMaxTxSigops));
 
         int64_t nFees = tx.GetValueIn(mapInputs)-tx.GetValueOut();
         unsigned int nSize = ::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION);
@@ -1446,6 +1450,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     int64_t nValueOut = 0;
     int64_t nStakeReward = 0;
     unsigned int nSigOps = 0;
+    unsigned int nMaxBlockSigops = GetMaxBlockSigops(pindex->nHeight);
     BOOST_FOREACH(CTransaction& tx, vtx)
     {
         uint256 hashTx = tx.GetHash();
@@ -1470,7 +1475,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         }
 
         nSigOps += GetLegacySigOpCount(tx);
-        if (nSigOps > MAX_BLOCK_SIGOPS)
+        if (nSigOps > nMaxBlockSigops)
             return DoS(100, error("ConnectBlock() : too many sigops"));
 
         CDiskTxPos posThisTx(pindex->nFile, pindex->nBlockPos, nTxPos);
@@ -1490,7 +1495,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             // this is to prevent a "rogue miner" from creating
             // an incredibly-expensive-to-validate block.
             nSigOps += GetP2SHSigOpCount(tx, mapInputs);
-            if (nSigOps > MAX_BLOCK_SIGOPS)
+            if (nSigOps > nMaxBlockSigops)
                 return DoS(100, error("ConnectBlock() : too many sigops"));
 
             int64_t nTxValueIn = tx.GetValueIn(mapInputs);
@@ -1932,7 +1937,10 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
     // that can be verified before saving an orphan block.
 
     // Size limits
-    if (vtx.empty() || vtx.size() > MAX_BLOCK_SIZE || ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION) > MAX_BLOCK_SIZE)
+    // Use post-hardfork maximum (MAX_BLOCK_SIZE_V2) here since CheckBlock() is context-independent
+    // and may validate blocks without knowing their height. The height-specific limit is enforced
+    // in AcceptBlock() which has access to the block height.
+    if (vtx.empty() || vtx.size() > MAX_BLOCK_SIZE_V2 || ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION) > MAX_BLOCK_SIZE_V2)
         return DoS(100, error("CheckBlock() : size limits failed"));
 
     // Check proof of work matches claimed amount
@@ -1994,7 +2002,9 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
     {
         nSigOps += GetLegacySigOpCount(tx);
     }
-    if (nSigOps > MAX_BLOCK_SIGOPS)
+    // Use post-hardfork maximum since CheckBlock() has no height context;
+    // height-specific sigops limit is enforced in ConnectBlock()
+    if (nSigOps > MAX_BLOCK_SIGOPS_V2)
         return DoS(100, error("CheckBlock() : out-of-bounds SigOpCount"));
 
     // Check merkle root
@@ -2023,6 +2033,12 @@ bool CBlock::AcceptBlock()
 
     if (IsProofOfWork() && nHeight > Params().LastPOWBlock())
         return DoS(100, error("AcceptBlock() : reject proof-of-work at height %d", nHeight));
+
+    // Enforce height-specific block size limit (hardfork at block 1,111,111 increases to 64 MB)
+    unsigned int nMaxBlockSize = GetMaxBlockSize(nHeight);
+    if (::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION) > nMaxBlockSize)
+        return DoS(100, error("AcceptBlock() : block size %u exceeds limit %u at height %d",
+                   ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION), nMaxBlockSize, nHeight));
 
     // Check coinbase timestamp
     if (GetBlockTime() > FutureDrift((int64_t)vtx[0].nTime))
