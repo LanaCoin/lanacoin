@@ -28,3 +28,5 @@ build
 
 # Cross-compilation build dependencies
 depends/win64/
+build_win/
+aqtinstall.log
