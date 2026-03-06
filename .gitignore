@@ -25,3 +25,6 @@ build
 .qmake.stash
 
 !src/leveldb/Makefile
+
+# Cross-compilation build dependencies
+depends/win64/
