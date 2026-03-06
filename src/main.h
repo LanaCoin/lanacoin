@@ -41,6 +41,9 @@ static const unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
 /** Hardfork activation height for block size increase to 64 MB */
 static const int HARDFORK_BLOCK_SIZE_HEIGHT = 1111111;
 
+/** Post-hardfork PoS difficulty retarget interval (every 75 blocks) */
+static const int POS_RETARGET_INTERVAL_V2 = 75;
+
 /** Post-hardfork block size limits (64 MB) */
 static const unsigned int MAX_BLOCK_SIZE_V2 = 64000000;
 static const unsigned int MAX_BLOCK_SIZE_GEN_V2 = MAX_BLOCK_SIZE_V2/2;

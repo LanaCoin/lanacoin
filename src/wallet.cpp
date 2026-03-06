@@ -1135,11 +1135,18 @@ void CWallet::AvailableCoinsForStaking(vector<COutput>& vCoins, unsigned int nSp
             if (nDepth < 1)
                 continue;
 
-            if (nDepth < nCoinbaseMaturity)
-                continue;
+            // Post-hardfork: PoS coinstake outputs mature instantly and can be re-staked
+            bool fPostHardforkCoinstake = pcoin->IsCoinStake() && nDepth > 0 &&
+                (nBestHeight - nDepth + 1) >= HARDFORK_BLOCK_SIZE_HEIGHT;
 
-            if (pcoin->GetBlocksToMaturity() > 0)
-                continue;
+            if (!fPostHardforkCoinstake)
+            {
+                if (nDepth < nCoinbaseMaturity)
+                    continue;
+
+                if (pcoin->GetBlocksToMaturity() > 0)
+                    continue;
+            }
 
             for (unsigned int i = 0; i < pcoin->vout.size(); i++)
                 if (!(pcoin->IsSpent(i)) && IsMine(pcoin->vout[i]) && pcoin->vout[i].nValue >= nMinimumInputValue)

@@ -798,6 +798,19 @@ int CMerkleTx::GetBlocksToMaturity() const
 {
     if (!(IsCoinBase() || IsCoinStake()))
         return 0;
+
+    // Post-hardfork: PoS coinstake outputs mature instantly
+    if (IsCoinStake())
+    {
+        int nDepth = GetDepthInMainChain();
+        if (nDepth > 0)
+        {
+            int nBlockHeight = nBestHeight - nDepth + 1;
+            if (nBlockHeight >= HARDFORK_BLOCK_SIZE_HEIGHT)
+                return 0;
+        }
+    }
+
     return max(0, (nCoinbaseMaturity+1) - GetDepthInMainChain());
 }
 
@@ -1042,6 +1055,43 @@ unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfS
         return bnTargetLimit.GetCompact(); // second block
 
     int64_t nTargetSpacing = GetTargetSpacing(pindexLast->nHeight);
+
+    // Post-hardfork: PoS retargets every 75 blocks instead of every block
+    if (fProofOfStake && pindexLast->nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT)
+    {
+        // Only retarget at interval boundaries
+        if (pindexLast->nHeight % POS_RETARGET_INTERVAL_V2 != 0)
+            return pindexPrev->nBits;
+
+        // Walk back to find the PoS block POS_RETARGET_INTERVAL_V2 blocks ago
+        const CBlockIndex* pindexFirst = pindexPrev;
+        for (int i = 0; pindexFirst && pindexFirst->pprev && i < POS_RETARGET_INTERVAL_V2 - 1; i++)
+            pindexFirst = GetLastBlockIndex(pindexFirst->pprev, true);
+
+        if (!pindexFirst || !pindexFirst->pprev)
+            return pindexPrev->nBits;
+
+        // Calculate actual timespan over the interval
+        int64_t nActualTimespan = pindexPrev->GetBlockTime() - pindexFirst->GetBlockTime();
+        int64_t nTargetTimespanV2 = POS_RETARGET_INTERVAL_V2 * nTargetSpacing;
+
+        // Limit adjustment to 4x in either direction
+        if (nActualTimespan < nTargetTimespanV2 / 4)
+            nActualTimespan = nTargetTimespanV2 / 4;
+        if (nActualTimespan > nTargetTimespanV2 * 4)
+            nActualTimespan = nTargetTimespanV2 * 4;
+
+        CBigNum bnNew;
+        bnNew.SetCompact(pindexPrev->nBits);
+        bnNew *= nActualTimespan;
+        bnNew /= nTargetTimespanV2;
+
+        if (bnNew <= 0 || bnNew > bnTargetLimit)
+            bnNew = bnTargetLimit;
+
+        return bnNew.GetCompact();
+    }
+
     int64_t nActualSpacing = pindexPrev->GetBlockTime() - pindexPrevPrev->GetBlockTime();
     if (nActualSpacing < 0)
         nActualSpacing = nTargetSpacing;
@@ -1300,11 +1350,15 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, MapPrevTx inputs, map<uint256, CTx
                 return DoS(100, error("ConnectInputs() : %s prevout.n out of range %d %u %u prev tx %s\n%s", GetHash().ToString(), prevout.n, txPrev.vout.size(), txindex.vSpent.size(), prevout.hash.ToString(), txPrev.ToString()));
 
             // If prev is coinbase or coinstake, check that it's matured
+            // Post-hardfork: PoS coinstake outputs mature instantly
             if (txPrev.IsCoinBase() || txPrev.IsCoinStake())
             {
-                int nSpendDepth;
-                if (IsConfirmedInNPrevBlocks(txindex, pindexBlock, nCoinbaseMaturity, nSpendDepth))
-                    return error("ConnectInputs() : tried to spend %s at depth %d", txPrev.IsCoinBase() ? "coinbase" : "coinstake", nSpendDepth);
+                if (!(txPrev.IsCoinStake() && pindexBlock->nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT))
+                {
+                    int nSpendDepth;
+                    if (IsConfirmedInNPrevBlocks(txindex, pindexBlock, nCoinbaseMaturity, nSpendDepth))
+                        return error("ConnectInputs() : tried to spend %s at depth %d", txPrev.IsCoinBase() ? "coinbase" : "coinstake", nSpendDepth);
+                }
             }
 
             // ppcoin: check transaction timestamp

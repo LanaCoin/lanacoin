@@ -314,9 +314,13 @@ bool CheckProofOfStake(CBlockIndex* pindexPrev, const CTransaction& tx, unsigned
         return fDebug? error("CheckProofOfStake() : read block failed") : false; // unable to read block of previous transaction
 
     // Min age requirement
-    int nDepth;
-    if (IsConfirmedInNPrevBlocks(txindex, pindexPrev, nCoinbaseMaturity - 1, nDepth))
-        return tx.DoS(100, error("CheckProofOfStake() : tried to stake at depth %d", nDepth + 1));
+    // Post-hardfork: skip maturity check for coinstake outputs (they mature instantly)
+    if (!(txPrev.IsCoinStake() && pindexPrev->nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT))
+    {
+        int nDepth;
+        if (IsConfirmedInNPrevBlocks(txindex, pindexPrev, nCoinbaseMaturity - 1, nDepth))
+            return tx.DoS(100, error("CheckProofOfStake() : tried to stake at depth %d", nDepth + 1));
+    }
 
     if (!CheckStakeKernelHash(pindexPrev, nBits, block, txindex.pos.nTxPos - txindex.pos.nBlockPos, txPrev, txin.prevout, tx.nTime, hashProofOfStake, targetProofOfStake, fDebug))
         return tx.DoS(1, error("CheckProofOfStake() : INFO: check kernel failed on coinstake %s, hashProof=%s", tx.GetHash().ToString(), hashProofOfStake.ToString())); // may occur during initial download or if behind on block chain sync
@@ -345,10 +349,13 @@ bool CheckKernel(CBlockIndex* pindexPrev, unsigned int nBits, int64_t nTime, con
     if (!block.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
         return false;
 
-    int nDepth;
-    if (IsConfirmedInNPrevBlocks(txindex, pindexPrev, nCoinbaseMaturity - 1, nDepth))
-        return false;
-
+    // Post-hardfork: skip maturity check for coinstake outputs (they mature instantly)
+    if (!(txPrev.IsCoinStake() && pindexPrev->nHeight >= HARDFORK_BLOCK_SIZE_HEIGHT))
+    {
+        int nDepth;
+        if (IsConfirmedInNPrevBlocks(txindex, pindexPrev, nCoinbaseMaturity - 1, nDepth))
+            return false;
+    }
 
     if (pBlockTime)
         *pBlockTime = block.GetBlockTime();
