@@ -1,4 +1,5 @@
 #include "hash.h"
+#include <openssl/crypto.h>
 
 int HMAC_SHA512_Init(HMAC_SHA512_CTX *pctx, const void *pkey, size_t len)
 {
@@ -15,6 +16,7 @@ int HMAC_SHA512_Init(HMAC_SHA512_CTX *pctx, const void *pkey, size_t len)
         EVP_DigestInit_ex(ctxKey, EVP_sha512(), NULL);
         EVP_DigestUpdate(ctxKey, pkey, len);
         EVP_DigestFinal_ex(ctxKey, key, &key_len);
+        EVP_MD_CTX_free(ctxKey);
 
         memset(key + 64, 0, 64);
     }
@@ -31,6 +33,7 @@ int HMAC_SHA512_Init(HMAC_SHA512_CTX *pctx, const void *pkey, size_t len)
     EVP_DigestInit_ex(pctx->ctxInner, EVP_sha512(), NULL);
     EVP_DigestUpdate(pctx->ctxInner, key, 128);
 
+    OPENSSL_cleanse(key, sizeof(key));
     return 0;
 }
 

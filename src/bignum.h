@@ -53,23 +53,14 @@ public:
 
 
 /** C++ wrapper for BIGNUM (OpenSSL bignum) */
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
 class CBigNum
-#else
-class CBigNum : public BIGNUM
-#endif
 {
 protected:
     BIGNUM  *bn;
- 
+
     void init()
     {
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
       bn = BN_new();
-#else
-      bn = this;
-      BN_init(this);
-#endif
     }
 
 public:
@@ -626,10 +617,10 @@ public:
     bool isPrime(const int checks=BN_prime_checks) const {
         CAutoBN_CTX pctx;
 
-        int ret = BN_is_prime_ex(bn, checks, pctx, NULL);
+        int ret = BN_check_prime(bn, pctx, NULL);
 
         if(ret < 0){
-            throw bignum_error("CBigNum::isPrime :BN_is_prime");
+            throw bignum_error("CBigNum::isPrime :BN_check_prime");
         }
         return ret;
     }
@@ -821,10 +812,6 @@ inline bool operator<(const CBigNum& a, const CBigNum& b)  { return (BN_cmp(&a, 
 inline bool operator>(const CBigNum& a, const CBigNum& b)  { return (BN_cmp(&a, &b) > 0); }
 inline std::ostream& operator<<(std::ostream &strm, const CBigNum &b) { return strm << b.ToString(10); }
 
-
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-typedef  CBigNum Bignum;
-#endif
 
 #endif
  

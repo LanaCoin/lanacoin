@@ -180,6 +180,7 @@ err:
     if (R != NULL) EC_POINT_free(R);
     if (O != NULL) EC_POINT_free(O);
     if (Q != NULL) EC_POINT_free(Q);
+    EC_GROUP_free((EC_GROUP*)group);
 
     return ret;
 }
@@ -259,7 +260,7 @@ public:
             return false;
 
         if (!fSkipCheck) {
-            EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+            EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(new_pkey, NULL);
             if (!ctx) {
                 return false;
             }
@@ -380,7 +381,7 @@ public:
             goto err;
 
         sig = (unsigned char*)OPENSSL_malloc(siglen);
-        if (!*sig)
+        if (!sig)
             goto err;
         if (EVP_DigestSignFinal(mdctx, sig, &siglen) <= 0)
             goto err;
@@ -440,6 +441,7 @@ public:
         }
         BN_CTX_end(ctx);
         BN_CTX_free(ctx);
+        EC_GROUP_free((EC_GROUP*)group);
 
         unsigned int nSize = EVP_PKEY_size(pkey);
         vchSig.resize(nSize); // Make sure it is big enough
@@ -544,16 +546,11 @@ public:
         if (rec<0 || rec>=3)
             return false;
         ECDSA_SIG *sig = ECDSA_SIG_new();
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-        BN_bin2bn(&p64[0],  32, sig->r);
-        BN_bin2bn(&p64[32], 32, sig->s);
-#else
         BIGNUM *r = BN_new();
         BIGNUM *s = BN_new();
         BN_bin2bn(&p64[0],  32, r);
         BN_bin2bn(&p64[32], 32, s);
         ECDSA_SIG_set0(sig, r, s);
-#endif
         bool ret = recover_pubkey_GFp(pkey, sig, (unsigned char*)&hash, sizeof(hash), rec, 0) == 1;
         ECDSA_SIG_free(sig);
         return ret;
@@ -748,12 +745,6 @@ bool EnsureLowS(std::vector<unsigned char>& vchSig) {
     BIGNUM *order = BN_bin2bn(vchOrder, sizeof(vchOrder), NULL);
     BIGNUM *halforder = BN_bin2bn(vchHalfOrder, sizeof(vchHalfOrder), NULL);
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-     if (BN_cmp(sig->s, halforder) > 0) {
-           // enforce low S values, by negating the value (modulo the order) if above order/2.
-           BN_sub(sig->s, order, sig->s);
-     }
-#else
     if (BN_cmp(ECDSA_SIG_get0_s(sig), halforder) > 0) {
         // enforce low S values, by negating the value (modulo the order) if above order/2.
         BIGNUM *s = BN_dup(ECDSA_SIG_get0_s(sig));
@@ -761,7 +752,6 @@ bool EnsureLowS(std::vector<unsigned char>& vchSig) {
         BN_sub(s, order, s);
         ECDSA_SIG_set0(sig, r, s);
     }
-#endif
 
     BN_free(halforder);
     BN_free(order);

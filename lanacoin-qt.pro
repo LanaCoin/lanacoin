@@ -1,12 +1,14 @@
 TEMPLATE = app
 TARGET = lanacoin-qt
-VERSION = 1.0.0
+VERSION = 1.1.0
 INCLUDEPATH += src src/json src/qt
 QT += network
 DEFINES += ENABLE_WALLET
 DEFINES += BOOST_THREAD_USE_LIB BOOST_SPIRIT_THREADSAFE
 CONFIG += no_include_pwd
 CONFIG += thread
+CONFIG += c++17
+QMAKE_CXXFLAGS += -std=c++17
 
 greaterThan(QT_MAJOR_VERSION, 4) {
     QT += widgets
@@ -33,8 +35,8 @@ UI_DIR = build
 
 # use: qmake "RELEASE=1"
 contains(RELEASE, 1) {
-    # Mac: compile for maximum compatibility (10.5, 32-bit)
-    macx:QMAKE_CXXFLAGS += -mmacosx-version-min=10.5 -arch x86_64 -isysroot /Developer/SDKs/MacOSX10.5.sdk
+    # Mac: compile for macOS 10.14+ (Mojave and later)
+    macx:QMAKE_CXXFLAGS += -mmacosx-version-min=10.14 -arch x86_64
 
     !windows:!macx {
         # Linux: static link

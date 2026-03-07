@@ -296,7 +296,7 @@ public:
     {
         char psz[sizeof(pn)*2 + 1];
         for (unsigned int i = 0; i < sizeof(pn); i++)
-            sprintf(psz + i*2, "%02x", ((unsigned char*)pn)[sizeof(pn) - i - 1]);
+            snprintf(psz + i*2, 3, "%02x", ((unsigned char*)pn)[sizeof(pn) - i - 1]);
         return std::string(psz, psz + sizeof(pn)*2);
     }
 

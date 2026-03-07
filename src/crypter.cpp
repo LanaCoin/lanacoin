@@ -8,8 +8,6 @@
 
 #include <string>
 #include <vector>
-#include <boost/foreach.hpp>
-#include <openssl/aes.h>
 #include <openssl/evp.h>
 #ifdef WIN32
 #include <windows.h>
@@ -54,32 +52,21 @@ bool CCrypter::Encrypt(const CKeyingMaterial& vchPlaintext, std::vector<unsigned
         return false;
 
     // max ciphertext len for a n bytes of plaintext is
-    // n + AES_BLOCK_SIZE - 1 bytes
+    // n + AES_BLOCK_SIZE bytes
     int nLen = vchPlaintext.size();
-    int nCLen = nLen + AES_BLOCK_SIZE, nFLen = 0;
+    int nCLen = nLen + EVP_MAX_BLOCK_LENGTH, nFLen = 0;
     vchCiphertext = std::vector<unsigned char> (nCLen);
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-    EVP_CIPHER_CTX ctx;
-#else
-    EVP_CIPHER_CTX *ctx = NULL;
-#endif
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx)
+        return false;
 
     bool fOk = true;
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-    EVP_CIPHER_CTX_init(&ctx);
-    if (fOk) fOk = EVP_EncryptInit_ex(&ctx, EVP_aes_256_cbc(), NULL, chKey, chIV);
-    if (fOk) fOk = EVP_EncryptUpdate(&ctx, &vchCiphertext[0], &nCLen, &vchPlaintext[0], nLen);
-    if (fOk) fOk = EVP_EncryptFinal_ex(&ctx, (&vchCiphertext[0])+nCLen, &nFLen);
-    EVP_CIPHER_CTX_cleanup(&ctx);
-#else
-    EVP_CIPHER_CTX_init(ctx);
     if (fOk) fOk = EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, chKey, chIV);
     if (fOk) fOk = EVP_EncryptUpdate(ctx, &vchCiphertext[0], &nCLen, &vchPlaintext[0], nLen);
     if (fOk) fOk = EVP_EncryptFinal_ex(ctx, (&vchCiphertext[0])+nCLen, &nFLen);
-    EVP_CIPHER_CTX_cleanup(ctx);
-#endif
+    EVP_CIPHER_CTX_free(ctx);
 
     if (!fOk) return false;
 
@@ -98,27 +85,16 @@ bool CCrypter::Decrypt(const std::vector<unsigned char>& vchCiphertext, CKeyingM
 
     vchPlaintext = CKeyingMaterial(nPLen);
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-    EVP_CIPHER_CTX ctx;
-#else
-    EVP_CIPHER_CTX *ctx = NULL;
-#endif
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx)
+        return false;
 
     bool fOk = true;
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-    EVP_CIPHER_CTX_init(&ctx);
-    if (fOk) fOk = EVP_DecryptInit_ex(&ctx, EVP_aes_256_cbc(), NULL, chKey, chIV);
-    if (fOk) fOk = EVP_DecryptUpdate(&ctx, &vchPlaintext[0], &nPLen, &vchCiphertext[0], nLen);
-    if (fOk) fOk = EVP_DecryptFinal_ex(&ctx, (&vchPlaintext[0])+nPLen, &nFLen);
-    EVP_CIPHER_CTX_cleanup(&ctx);
-#else
-    EVP_CIPHER_CTX_init(ctx);
     if (fOk) fOk = EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, chKey, chIV);
     if (fOk) fOk = EVP_DecryptUpdate(ctx, &vchPlaintext[0], &nPLen, &vchCiphertext[0], nLen);
     if (fOk) fOk = EVP_DecryptFinal_ex(ctx, (&vchPlaintext[0])+nPLen, &nFLen);
-    EVP_CIPHER_CTX_cleanup(ctx);
-#endif
+    EVP_CIPHER_CTX_free(ctx);
 
     if (!fOk) return false;
 
@@ -284,7 +260,7 @@ bool CCryptoKeyStore::EncryptKeys(CKeyingMaterial& vMasterKeyIn)
             return false;
 
         fUseCrypto = true;
-        BOOST_FOREACH(KeyMap::value_type& mKey, mapKeys)
+        for (auto& mKey : mapKeys)
         {
             const CKey &key = mKey.second;
             CPubKey vchPubKey = key.GetPubKey();

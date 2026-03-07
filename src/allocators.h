@@ -15,7 +15,7 @@
 #ifdef _WIN32_WINNT
 #undef _WIN32_WINNT
 #endif
-#define _WIN32_WINNT 0x0501
+#define _WIN32_WINNT 0x0601
 #define WIN32_LEAN_AND_MEAN 1
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -196,27 +196,22 @@ template<typename T> void UnlockObject(const T &t) {
 template<typename T>
 struct secure_allocator : public std::allocator<T>
 {
-    // MSVC8 default copy constructor is broken
     typedef std::allocator<T> base;
-    typedef typename base::size_type size_type;
-    typedef typename base::difference_type  difference_type;
-    typedef typename base::pointer pointer;
-    typedef typename base::const_pointer const_pointer;
-    typedef typename base::reference reference;
-    typedef typename base::const_reference const_reference;
-    typedef typename base::value_type value_type;
-    secure_allocator() throw() {}
-    secure_allocator(const secure_allocator& a) throw() : base(a) {}
+    typedef typename std::allocator_traits<base>::size_type size_type;
+    typedef typename std::allocator_traits<base>::difference_type difference_type;
+    typedef typename std::allocator_traits<base>::value_type value_type;
+    secure_allocator() noexcept {}
+    secure_allocator(const secure_allocator& a) noexcept : base(a) {}
     template <typename U>
-    secure_allocator(const secure_allocator<U>& a) throw() : base(a) {}
-    ~secure_allocator() throw() {}
+    secure_allocator(const secure_allocator<U>& a) noexcept : base(a) {}
+    ~secure_allocator() noexcept {}
     template<typename _Other> struct rebind
     { typedef secure_allocator<_Other> other; };
 
-    T* allocate(std::size_t n, const void *hint = 0)
+    T* allocate(std::size_t n)
     {
         T *p;
-        p = std::allocator<T>::allocate(n, hint);
+        p = std::allocator<T>::allocate(n);
         if (p != NULL)
             LockedPageManager::instance.LockRange(p, sizeof(T) * n);
         return p;
@@ -240,20 +235,15 @@ struct secure_allocator : public std::allocator<T>
 template<typename T>
 struct zero_after_free_allocator : public std::allocator<T>
 {
-    // MSVC8 default copy constructor is broken
     typedef std::allocator<T> base;
-    typedef typename base::size_type size_type;
-    typedef typename base::difference_type  difference_type;
-    typedef typename base::pointer pointer;
-    typedef typename base::const_pointer const_pointer;
-    typedef typename base::reference reference;
-    typedef typename base::const_reference const_reference;
-    typedef typename base::value_type value_type;
-    zero_after_free_allocator() throw() {}
-    zero_after_free_allocator(const zero_after_free_allocator& a) throw() : base(a) {}
+    typedef typename std::allocator_traits<base>::size_type size_type;
+    typedef typename std::allocator_traits<base>::difference_type difference_type;
+    typedef typename std::allocator_traits<base>::value_type value_type;
+    zero_after_free_allocator() noexcept {}
+    zero_after_free_allocator(const zero_after_free_allocator& a) noexcept : base(a) {}
     template <typename U>
-    zero_after_free_allocator(const zero_after_free_allocator<U>& a) throw() : base(a) {}
-    ~zero_after_free_allocator() throw() {}
+    zero_after_free_allocator(const zero_after_free_allocator<U>& a) noexcept : base(a) {}
+    ~zero_after_free_allocator() noexcept {}
     template<typename _Other> struct rebind
     { typedef zero_after_free_allocator<_Other> other; };
 
