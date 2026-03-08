@@ -19,13 +19,15 @@ INCLUDEPATHS= \
  -I"$(CURDIR)"/obj \
  -I"$(DEPSDIR)/boost_1_68_0" \
  -I"$(DEPSDIR)/db-6.0.20/build_unix" \
- -I"$(DEPSDIR)/openssl-1.1.1w/include" \
+ -I"$(DEPSDIR)/openssl-3.0.13/include" \
+ -I"$(DEPSDIR)/zlib-1.3.1/include" \
  -I"$(DEPSDIR)"
 
 LIBPATHS= \
  -L"$(DEPSDIR)/boost_1_68_0/stage/lib" \
  -L"$(DEPSDIR)/db-6.0.20/build_unix" \
- -L"$(DEPSDIR)/openssl-1.1.1w/lib"
+ -L"$(DEPSDIR)/openssl-3.0.13/lib64" \
+ -L"$(DEPSDIR)/zlib-1.3.1/lib"
 
 LIBS= \
  -l boost_chrono-mt \

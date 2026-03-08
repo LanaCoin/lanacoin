@@ -1668,9 +1668,11 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
         // Queue memory transactions to resurrect.
         // We only do this for blocks after the last checkpoint (reorganisation before that
         // point should only happen with -reindex/-loadblock, or a misbehaving peer.
-        BOOST_REVERSE_FOREACH(const CTransaction& tx, block.vtx)
+        for (auto it = block.vtx.rbegin(); it != block.vtx.rend(); ++it) {
+            const CTransaction& tx = *it;
             if (!(tx.IsCoinBase() || tx.IsCoinStake()) && pindex->nHeight > Checkpoints::GetTotalBlocksEstimate())
                 vResurrect.push_front(tx);
+        }
     }
 
     // Connect longer branch
@@ -1796,8 +1798,9 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
         }
 
         // Connect further blocks
-        BOOST_REVERSE_FOREACH(CBlockIndex *pindex, vpindexSecondary)
+        for (auto it = vpindexSecondary.rbegin(); it != vpindexSecondary.rend(); ++it)
         {
+            CBlockIndex *pindex = *it;
             CBlock block;
             if (!block.ReadFromDisk(pindex))
             {

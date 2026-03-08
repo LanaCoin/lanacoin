@@ -42,10 +42,10 @@ echo ""
 DEPS_BUILD_DIR="$SCRIPT_DIR/depends/win64"
 mkdir -p "$DEPS_BUILD_DIR"
 
-# -- OpenSSL --
-OPENSSL_VERSION="1.1.1w"
+# -- OpenSSL (3.0+ required for key.cpp EVP API) --
+OPENSSL_VERSION="3.0.13"
 OPENSSL_DIR="$DEPSDIR/openssl-${OPENSSL_VERSION}"
-if [ ! -f "$OPENSSL_DIR/libssl.a" ]; then
+if [ ! -f "$OPENSSL_DIR/lib64/libssl.a" ] && [ ! -f "$OPENSSL_DIR/lib/libssl.a" ]; then
     echo "  Building OpenSSL ${OPENSSL_VERSION} for Windows..."
     cd "$DEPS_BUILD_DIR"
     if [ ! -d "openssl-${OPENSSL_VERSION}" ]; then
