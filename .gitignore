@@ -14,7 +14,10 @@ src/build.h
 #compilation and Qt preprocessor part
 *.qm
 Makefile
+Makefile.Debug
+Makefile.Release
 lanacoin-qt
+lanacoin-qt_plugin_import.cpp
 #resources cpp
 qrc_*.cpp
 #qt creator
