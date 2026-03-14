@@ -22,6 +22,9 @@
 #error "OpenSSL 1 has reached EOL and is not supported anymore, please upgrade to OpenSSL 3"
 #endif
 
+// OpenSSL 3.x is available - use modern EVP API paths
+#define OPENSSL_IS_SANE 1
+
 // anonymous namespace with local implementation code (OpenSSL interaction)
 namespace {
 
@@ -103,7 +106,7 @@ int recover_pubkey_GFp(EVP_PKEY *eckey, ECDSA_SIG *ecsig, const unsigned char *m
 
     int ret = 0;
     BN_CTX *ctx = NULL;
-    unsigned char pubkey_buf[1000];
+    unsigned char pubkey_buf[65]; // max uncompressed secp256k1 pubkey size
     size_t pubkey_len;
 
     BIGNUM *x = NULL;
@@ -198,6 +201,7 @@ public:
         EVP_PKEY_keygen_init(ctx);
         EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_secp256k1);
         EVP_PKEY_keygen(ctx, &pkey);
+        EVP_PKEY_CTX_free(ctx);
 
         assert(pkey != NULL);
     }
@@ -358,7 +362,7 @@ public:
     }
 
     int do_sign(const unsigned char *msg, size_t msglen, ECDSA_SIG **sigout) {
-        EVP_MD_CTX *mdctx = NULL;
+        EVP_PKEY_CTX *ctx = NULL;
         unsigned char *sig = NULL;
         size_t siglen = 0;
         const unsigned char *p = NULL;
@@ -367,23 +371,25 @@ public:
         if (!msg)
             return 0;
 
-        mdctx = EVP_MD_CTX_new();
-        if (!mdctx)
+        ctx = EVP_PKEY_CTX_new(pkey, NULL);
+        if (!ctx)
             return 0;
 
-        if (EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, pkey) <= 0)
+        if (EVP_PKEY_sign_init(ctx) <= 0)
             goto err;
 
-        if (EVP_DigestSignUpdate(mdctx, msg, msglen) <= 0)
+        // Use NULL digest since the data is already hashed (Bitcoin pre-hashes with SHA256d)
+        if (EVP_PKEY_CTX_set_signature_md(ctx, EVP_md_null()) <= 0)
             goto err;
 
-        if (EVP_DigestSignFinal(mdctx, NULL, &siglen) <= 0)
+        // Determine signature length
+        if (EVP_PKEY_sign(ctx, NULL, &siglen, msg, msglen) <= 0)
             goto err;
 
         sig = (unsigned char*)OPENSSL_malloc(siglen);
         if (!sig)
             goto err;
-        if (EVP_DigestSignFinal(mdctx, sig, &siglen) <= 0)
+        if (EVP_PKEY_sign(ctx, sig, &siglen, msg, msglen) <= 0)
             goto err;
 
         p = sig;
@@ -397,7 +403,7 @@ public:
         if (sig) {
             OPENSSL_free(sig);
         }
-        EVP_MD_CTX_free(mdctx);
+        EVP_PKEY_CTX_free(ctx);
 
         return ret;
     }
@@ -543,7 +549,7 @@ public:
     // (the signature is a valid signature of the given data for that key)
     bool Recover(const uint256 &hash, const unsigned char *p64, int rec)
     {
-        if (rec<0 || rec>=3)
+        if (rec<0 || rec>=4)
             return false;
         ECDSA_SIG *sig = ECDSA_SIG_new();
         BIGNUM *r = BN_new();
@@ -585,8 +591,8 @@ public:
 
     bool TweakPublic(const unsigned char vchTweak[32]) {
         bool ret = true;
-        size_t pubkey_len = 0;
-        unsigned char pubkey_buf[256];
+        size_t pubkey_len = 65; // max uncompressed secp256k1 pubkey size
+        unsigned char pubkey_buf[65];
         BN_CTX *ctx = BN_CTX_new();
         BN_CTX_start(ctx);
         BIGNUM *bnTweak = BN_CTX_get(ctx);
@@ -633,16 +639,17 @@ public:
         pubkey_len = EC_POINT_point2oct(group, point, POINT_CONVERSION_UNCOMPRESSED,
                                        pubkey_buf, sizeof(pubkey_buf), NULL);
         if (pubkey_len == 0) {
-           ret = -2;
+           ret = false;
            goto err;
         }
 
         if (EVP_PKEY_set1_encoded_public_key(pkey, pubkey_buf, pubkey_len) != 1) {
-           ret = -2;
+           ret = false;
            goto err;
         }
 err:
         EC_POINT_free(point);
+        EC_GROUP_free((EC_GROUP*)group);
         BN_CTX_end(ctx);
         BN_CTX_free(ctx);
         return ret;
