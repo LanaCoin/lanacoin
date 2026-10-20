@@ -127,7 +127,8 @@ OBJS= \
     obj/noui.o \
     obj/kernel.o \
     obj/pbkdf2.o \
-    obj/chainparams.o
+    obj/chainparams.o \
+    obj/pqkey.o
 
 ifeq (${USE_WALLET}, 1)
     DEFS += -DENABLE_WALLET
@@ -151,6 +152,11 @@ leveldb/libleveldb.a:
 	@echo "Building LevelDB ..."; cd leveldb; make libleveldb.a libmemenv.a; cd ..;
 obj/txdb-leveldb.o: leveldb/libleveldb.a
 
+# Post-quantum signatures (ML-DSA-44)
+DEFS += -I"$(CURDIR)/pqcrypto"
+pqcrypto/libpqcrypto.a: $(wildcard pqcrypto/*.[ch] pqcrypto/mldsa44/*.[ch])
+	@echo "Building pqcrypto ..."; cd pqcrypto; $(MAKE) CC="$(CC)" CFLAGS="-O2 $(HARDENING)" libpqcrypto.a; cd ..
+
 # auto-generated dependencies:
 -include obj/*.P
 
@@ -166,7 +172,7 @@ obj/%.o: %.cpp
 	      -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
 	  rm -f $(@:%.o=%.d)
 
-lanacoind: $(OBJS:obj/%=obj/%)
+lanacoind: $(OBJS:obj/%=obj/%) pqcrypto/libpqcrypto.a
 	$(LINK) $(xCXXFLAGS) -o $@ $^ $(xLDFLAGS) $(LIBS)
 
 clean:
@@ -174,5 +180,6 @@ clean:
 	-rm -f obj/*.o
 	-rm -f obj/*.P
 	-rm -f obj/build.h
+	-cd pqcrypto && $(MAKE) clean
 
 FORCE:

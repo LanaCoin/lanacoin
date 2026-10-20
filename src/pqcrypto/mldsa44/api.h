@@ -11,6 +11,13 @@
 
 int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk);
 
+int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair_seed(uint8_t *pk, uint8_t *sk, const uint8_t *seed);
+
+int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx_rnd(uint8_t *sig, size_t *siglen,
+        const uint8_t *m, size_t mlen,
+        const uint8_t *ctx, size_t ctxlen,
+        const uint8_t *rnd, const uint8_t *sk);
+
 int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(uint8_t *sig, size_t *siglen,
         const uint8_t *m, size_t mlen,
         const uint8_t *ctx, size_t ctxlen,

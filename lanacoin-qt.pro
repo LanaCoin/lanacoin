@@ -96,6 +96,19 @@ contains(BITCOIN_NEED_QT_PLUGINS, 1) {
 INCLUDEPATH += src/leveldb/include src/leveldb/helpers
 LIBS += $$PWD/src/leveldb/libleveldb.a $$PWD/src/leveldb/libmemenv.a
 SOURCES += src/txdb-leveldb.cpp
+
+# Post-quantum signatures (ML-DSA-44)
+INCLUDEPATH += src/pqcrypto
+SOURCES += src/pqcrypto/fips202.c \
+    src/pqcrypto/randombytes.c \
+    src/pqcrypto/mldsa44/ntt.c \
+    src/pqcrypto/mldsa44/packing.c \
+    src/pqcrypto/mldsa44/poly.c \
+    src/pqcrypto/mldsa44/polyvec.c \
+    src/pqcrypto/mldsa44/reduce.c \
+    src/pqcrypto/mldsa44/rounding.c \
+    src/pqcrypto/mldsa44/sign.c \
+    src/pqcrypto/mldsa44/symmetric-shake.c
 !win32 {
     # we use QMAKE_CXXFLAGS_RELEASE even without RELEASE=1 because we use RELEASE to indicate linking preferences not -O preferences
     genleveldb.commands = cd $$PWD/src/leveldb && CC=$$QMAKE_CC CXX=$$QMAKE_CXX $(MAKE) OPT=\"$$QMAKE_CXXFLAGS $$QMAKE_CXXFLAGS_RELEASE\" libleveldb.a libmemenv.a
@@ -176,6 +189,7 @@ HEADERS += src/qt/bitcoingui.h \
     src/miner.h \
     src/net.h \
     src/key.h \
+    src/pqkey.h \
     src/db.h \
     src/txdb.h \
     src/txmempool.h \
@@ -252,6 +266,7 @@ SOURCES += src/qt/bitcoin.cpp src/qt/bitcoingui.cpp \
     src/hash.cpp \
     src/netbase.cpp \
     src/key.cpp \
+    src/pqkey.cpp \
     src/script.cpp \
     src/core.cpp \
     src/main.cpp \

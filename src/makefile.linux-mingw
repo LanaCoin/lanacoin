@@ -91,7 +91,8 @@ OBJS= \
     obj/noui.o \
     obj/kernel.o \
     obj/pbkdf2.o \
-    obj/chainparams.o
+    obj/chainparams.o \
+    obj/pqkey.o
 
 ifeq (${USE_WALLET}, 1)
     DEFS += -DENABLE_WALLET
@@ -115,6 +116,11 @@ leveldb/libleveldb.a:
 	@echo "Building LevelDB ..." && cd leveldb && CC=$(CC) CXX=$(CXX) TARGET_OS=OS_WINDOWS_CROSSCOMPILE CXXFLAGS="-I$(INCLUDEPATHS)" LDFLAGS="-L$(LIBPATHS)" $(MAKE) libleveldb.a libmemenv.a && $(RANLIB) libleveldb.a && $(RANLIB) libmemenv.a && cd ..
 obj/txdb-leveldb.o: leveldb/libleveldb.a
 
+# Post-quantum signatures (ML-DSA-44)
+DEFS += -I"$(CURDIR)/pqcrypto"
+pqcrypto/libpqcrypto.a: $(wildcard pqcrypto/*.[ch] pqcrypto/mldsa44/*.[ch])
+	@echo "Building pqcrypto ..."; cd pqcrypto && $(MAKE) CC=$(CC) AR=$(TARGET_PLATFORM)-w64-mingw32-ar RANLIB=$(RANLIB) CFLAGS="-O2 -I$(DEPSDIR)/include" libpqcrypto.a && cd ..
+
 obj/build.h: FORCE
 	/bin/sh ../share/genbuild.sh obj/build.h
 version.cpp: obj/build.h
@@ -123,7 +129,7 @@ DEFS += -DHAVE_BUILD_INFO
 obj/%.o: %.cpp $(HEADERS)
 	$(CXX) -c $(CFLAGS) -o $@ $<
 
-lanacoind.exe: $(OBJS:obj/%=obj/%)
+lanacoind.exe: $(OBJS:obj/%=obj/%) pqcrypto/libpqcrypto.a
 	$(CXX) $(CFLAGS) $(LDFLAGS) -o $@ $(LIBPATHS) $^ $(LIBS) -lshlwapi
 	$(STRIP) lanacoind.exe
 
@@ -132,5 +138,6 @@ clean:
 	-rm -f lanacoind.exe
 	-rm -f obj/build.h
 	cd leveldb && TARGET_OS=OS_WINDOWS_CROSSCOMPILE $(MAKE) clean && cd ..
+	cd pqcrypto && $(MAKE) clean && cd ..
 
 FORCE:

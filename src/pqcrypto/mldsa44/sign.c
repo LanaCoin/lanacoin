@@ -7,6 +7,7 @@
 #include "sign.h"
 #include "symmetric.h"
 #include <stdint.h>
+#include <string.h>
 
 /*************************************************
 * Name:        PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair
@@ -21,6 +22,13 @@
 * Returns 0 (success)
 **************************************************/
 int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
+    uint8_t seed[SEEDBYTES];
+    randombytes(seed, SEEDBYTES);
+    return PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair_seed(pk, sk, seed);
+}
+
+/* LanaCoin: deterministic key generation from a 32 byte seed (FIPS 204 ML-DSA.KeyGen_internal) */
+int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair_seed(uint8_t *pk, uint8_t *sk, const uint8_t *seed) {
     uint8_t seedbuf[2 * SEEDBYTES + CRHBYTES];
     uint8_t tr[TRBYTES];
     const uint8_t *rho, *rhoprime, *key;
@@ -29,7 +37,7 @@ int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
     polyveck s2, t1, t0;
 
     /* Get randomness for rho, rhoprime and key */
-    randombytes(seedbuf, SEEDBYTES);
+    memcpy(seedbuf, seed, SEEDBYTES);
     seedbuf[SEEDBYTES + 0] = K;
     seedbuf[SEEDBYTES + 1] = L;
     shake256(seedbuf, 2 * SEEDBYTES + CRHBYTES, seedbuf, SEEDBYTES + 2);
@@ -88,6 +96,24 @@ int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(uint8_t *sig,
         const uint8_t *ctx,
         size_t ctxlen,
         const uint8_t *sk) {
+    uint8_t rnd[RNDBYTES];
+    /* Hedged signing; if no randomness is available fall back to the
+     * deterministic variant (rnd = 0), which FIPS 204 also allows */
+    if (randombytes(rnd, RNDBYTES) != 0) {
+        memset(rnd, 0, RNDBYTES);
+    }
+    return PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx_rnd(sig, siglen, m, mlen, ctx, ctxlen, rnd, sk);
+}
+
+/* LanaCoin: signature with caller supplied randomness rnd (32 bytes) */
+int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx_rnd(uint8_t *sig,
+        size_t *siglen,
+        const uint8_t *m,
+        size_t mlen,
+        const uint8_t *ctx,
+        size_t ctxlen,
+        const uint8_t *rnd_in,
+        const uint8_t *sk) {
     unsigned int n;
     uint8_t seedbuf[2 * SEEDBYTES + TRBYTES + RNDBYTES + 2 * CRHBYTES];
     uint8_t *rho, *tr, *key, *mu, *rhoprime, *rnd;
@@ -121,7 +147,7 @@ int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(uint8_t *sig,
     shake256_inc_squeeze(mu, CRHBYTES, &state);
     shake256_inc_ctx_release(&state);
 
-    randombytes(rnd, RNDBYTES);
+    memcpy(rnd, rnd_in, RNDBYTES);
     shake256(rhoprime, CRHBYTES, key, SEEDBYTES + RNDBYTES + CRHBYTES);
 
     /* Expand matrix and transform vectors */

@@ -81,7 +81,8 @@ OBJS= \
     obj/noui.o \
     obj/kernel.o \
     obj/pbkdf2.o \
-    obj/chainparams.o
+    obj/chainparams.o \
+    obj/pqkey.o
 
 ifeq (${USE_WALLET}, 1)
     DEFS += -DENABLE_WALLET
@@ -105,10 +106,15 @@ leveldb/libleveldb.a:
 	cd leveldb; make; cd ..
 obj/txdb-leveldb.o: leveldb/libleveldb.a
 
+# Post-quantum signatures (ML-DSA-44)
+DEFS += -I"$(CURDIR)/pqcrypto"
+pqcrypto/libpqcrypto.a: $(wildcard pqcrypto/*.[ch] pqcrypto/mldsa44/*.[ch])
+	@echo "Building pqcrypto ..."; cd pqcrypto && $(MAKE) CC=gcc CFLAGS=-O2 libpqcrypto.a && cd ..
+
 obj/%.o: %.cpp $(HEADERS)
 	g++ -c $(CFLAGS) -o $@ $<
 
-lanacoind.exe: $(OBJS:obj/%=obj/%)
+lanacoind.exe: $(OBJS:obj/%=obj/%) pqcrypto/libpqcrypto.a
 	g++ $(CFLAGS) $(LDFLAGS) -o $@ $(LIBPATHS) $^ $(LIBS)
 
 clean:

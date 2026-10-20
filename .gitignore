@@ -24,3 +24,7 @@ qrc_*.cpp
 build
 
 !src/leveldb/Makefile
+src/pqcrypto/*.o
+src/pqcrypto/mldsa44/*.o
+src/pqcrypto/libpqcrypto.a
+!src/pqcrypto/Makefile
