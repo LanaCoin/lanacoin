@@ -33,6 +33,10 @@ jobs:
         working-directory: src
         run: ./lanacoind -? | head -n 5
 
+      - name: Post-quantum hard fork end-to-end test (regtest)
+        timeout-minutes: 15
+        run: python3 qa/rpc-tests/pq_hardfork.py src/lanacoind "$RUNNER_TEMP/pq_hardfork"
+
   lanacoin-qt:
     runs-on: ubuntu-24.04
     steps:

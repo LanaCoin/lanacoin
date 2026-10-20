@@ -1150,9 +1150,24 @@ int64_t CWallet::GetImmatureBalance() const
 }
 
 // populate vCoins with vector of spendable COutputs
+// Whether an output can be spent at the given time under the post-quantum
+// fork rules: post-quantum outputs from the fork on, ECDSA ones until the
+// ECDSA sunset
+static bool IsSpendableAt(const CScript& scriptPubKey, int64_t nTime)
+{
+    if (scriptPubKey.IsPayToScriptHash256())
+        return IsPQForkActive(nTime);
+    txnouttype whichType;
+    vector<valtype> vSolutions;
+    if (Solver(scriptPubKey, whichType, vSolutions) && whichType == TX_PQKEYHASH)
+        return IsPQForkActive(nTime);
+    return !IsECDSASunset(nTime);
+}
+
 void CWallet::AvailableCoins(vector<COutput>& vCoins, bool fOnlyConfirmed, const CCoinControl *coinControl) const
 {
     vCoins.clear();
+    const int64_t nNow = GetAdjustedTime();
 
     {
         LOCK2(cs_main, cs_wallet);
@@ -1178,7 +1193,8 @@ void CWallet::AvailableCoins(vector<COutput>& vCoins, bool fOnlyConfirmed, const
 
             for (unsigned int i = 0; i < pcoin->vout.size(); i++)
                 if (!(pcoin->IsSpent(i)) && IsMine(pcoin->vout[i]) && pcoin->vout[i].nValue >= nMinimumInputValue &&
-                (!coinControl || !coinControl->HasSelected() || coinControl->IsSelected((*it).first, i)))
+                (!coinControl || !coinControl->HasSelected() || coinControl->IsSelected((*it).first, i)) &&
+                IsSpendableAt(pcoin->vout[i].scriptPubKey, nNow))
                     vCoins.push_back(COutput(pcoin, i, nDepth));
 
         }
@@ -1206,7 +1222,8 @@ void CWallet::AvailableCoinsForStaking(vector<COutput>& vCoins, unsigned int nSp
                 continue;
 
             for (unsigned int i = 0; i < pcoin->vout.size(); i++)
-                if (!(pcoin->IsSpent(i)) && IsMine(pcoin->vout[i]) && pcoin->vout[i].nValue >= nMinimumInputValue)
+                if (!(pcoin->IsSpent(i)) && IsMine(pcoin->vout[i]) && pcoin->vout[i].nValue >= nMinimumInputValue &&
+                    IsSpendableAt(pcoin->vout[i].scriptPubKey, nSpendTime))
                     vCoins.push_back(COutput(pcoin, i, nDepth));
         }
     }
