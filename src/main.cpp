@@ -1167,6 +1167,11 @@ unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfS
     if (pindexLast == NULL)
         return bnTargetLimit.GetCompact(); // genesis block
 
+    // Regression test mode: no proof-of-work retargeting, so that blocks
+    // can be generated quickly
+    if (!fProofOfStake && Params().NetworkID() == CChainParams::REGTEST)
+        return bnTargetLimit.GetCompact();
+
     const CBlockIndex* pindexPrev = GetLastBlockIndex(pindexLast, fProofOfStake);
     if (pindexPrev->pprev == NULL)
         return bnTargetLimit.GetCompact(); // first block

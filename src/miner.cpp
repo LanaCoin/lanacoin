@@ -8,6 +8,7 @@
 #include "miner.h"
 #include "kernel.h"
 #include <memory>
+#include <openssl/sha.h>
 
 using namespace std;
 
@@ -36,23 +37,25 @@ int static FormatHashBlocks(void* pbuffer, unsigned int len)
 static const unsigned int pSHA256InitState[8] =
 {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 
+// One SHA-256 compression of a 64 byte block starting from state pinit (the
+// getwork midstate). EVP_MD_CTX_md_data() is NULL for OpenSSL 3 provider
+// digests, which crashed getwork, so use the low level SHA256 context.
 void SHA256Transform(void* pstate, void* pinput, const void* pinit)
 {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return;
-    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-
+    SHA256_CTX ctx;
     unsigned char data[64];
+
+    SHA256_Init(&ctx);
 
     for (int i = 0; i < 16; i++)
         ((uint32_t*)data)[i] = ByteReverse(((uint32_t*)pinput)[i]);
 
     for (int i = 0; i < 8; i++)
-        ((uint32_t*)EVP_MD_CTX_md_data(ctx))[i] = ((uint32_t*)pinit)[i];
+        ctx.h[i] = ((uint32_t*)pinit)[i];
 
-    EVP_DigestUpdate(ctx, data, sizeof(data));
+    SHA256_Update(&ctx, data, sizeof(data));
     for (int i = 0; i < 8; i++)
-        ((uint32_t*)pstate)[i] = ((uint32_t*)EVP_MD_CTX_md_data(ctx))[i];
+        ((uint32_t*)pstate)[i] = ctx.h[i];
 }
 
 // Some explaining would be appreciated

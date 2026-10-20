@@ -63,12 +63,19 @@ namespace Checkpoints
         ( 1054014,   uint256("0xe2f5173903bfcc394230cd4572757199197d86ff25f1ccb62060f66c31b009f3") )
     ;
 
-    // TestNet has no checkpoints
+    // TestNet and RegTest have no checkpoints
     static MapCheckpoints mapCheckpointsTestnet;
+
+    // The mainnet checkpoints apply to mainnet only; regtest used them too,
+    // which kept it in initial block download forever
+    static MapCheckpoints& CurrentCheckpoints()
+    {
+        return Params().NetworkID() == CChainParams::MAIN ? mapCheckpoints : mapCheckpointsTestnet;
+    }
 
     bool CheckHardened(int nHeight, const uint256& hash)
     {
-        MapCheckpoints& checkpoints = (TestNet() ? mapCheckpointsTestnet : mapCheckpoints);
+        MapCheckpoints& checkpoints = CurrentCheckpoints();
 
         MapCheckpoints::const_iterator i = checkpoints.find(nHeight);
         if (i == checkpoints.end()) return true;
@@ -77,7 +84,7 @@ namespace Checkpoints
 
     int GetTotalBlocksEstimate()
     {
-        MapCheckpoints& checkpoints = (TestNet() ? mapCheckpointsTestnet : mapCheckpoints);
+        MapCheckpoints& checkpoints = CurrentCheckpoints();
 
         if (checkpoints.empty())
             return 0;
@@ -86,7 +93,7 @@ namespace Checkpoints
 
     CBlockIndex* GetLastCheckpoint(const std::map<uint256, CBlockIndex*>& mapBlockIndex)
     {
-        MapCheckpoints& checkpoints = (TestNet() ? mapCheckpointsTestnet : mapCheckpoints);
+        MapCheckpoints& checkpoints = CurrentCheckpoints();
 
         BOOST_REVERSE_FOREACH(const MapCheckpoints::value_type& i, checkpoints)
         {
