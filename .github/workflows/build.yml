@@ -1,0 +1,26 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lanacoind:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libdb++-dev zlib1g-dev \
+            libboost-system-dev libboost-filesystem-dev libboost-program-options-dev \
+            libboost-thread-dev libboost-chrono-dev libboost-timer-dev
+
+      - name: Build lanacoind
+        working-directory: src
+        run: make -f makefile.unix -j"$(nproc)" USE_UPNP=-
+
+      - name: Smoke test
+        working-directory: src
+        run: ./lanacoind -? | head -n 5

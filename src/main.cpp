@@ -1004,7 +1004,16 @@ int64_t GetProofOfStakeReward(const CBlockIndex* pindexPrev, int64_t nCoinAge, i
 {
   int64_t nSubsidyFixed = 1000 * COIN;
 
-  nSubsidyFixed >>= (pindexBest->nHeight / 525600);
+  // Halving must depend on the block's own parent, not on the current tip:
+  // during a reorganization pindexBest still points to the old tip while
+  // blocks of the new branch are being connected.
+  // Stakers always called this with pindexPrev == pindexBest, so using
+  // pindexPrev->nHeight keeps the rule identical for normally created blocks.
+  int nHalvings = pindexPrev ? pindexPrev->nHeight / 525600 : 0;
+  if (nHalvings >= 63)
+      nSubsidyFixed = 0;
+  else
+      nSubsidyFixed >>= nHalvings;
 
   int64_t nSubsidy = nSubsidyFixed + nCoinAge * COIN_YEAR_REWARD * 33 / (365 * 33 + 8);
 

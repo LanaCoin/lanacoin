@@ -7,7 +7,7 @@
 
 - PoS block hashing: sha256d
 
-- Max Coins: 7.506.000.000 (7.5+ bilion)
+- Max Coins: 7.506.000.000 (7.5+ bilion) - this is the `MAX_MONEY` sanity limit for a single transaction output, not a hard cap on total supply (PoS 7% yearly interest has no end height)
 
 - PoW reward: 10000 LANA (no halving)
 
@@ -25,7 +25,7 @@
 
 - Difficulty retarget: every block
 
-- Coinbase maturity: 100 blocks
+- Coinbase/coinstake maturity: 15 blocks (outputs become spendable after 16 confirmations)
 
 - Transaction recommended minimum confirmations: 5
 

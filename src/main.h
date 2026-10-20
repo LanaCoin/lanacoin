@@ -54,7 +54,7 @@ static const unsigned int LOCKTIME_THRESHOLD = 500000000; // Tue Nov  5 00:53:20
 static const int64_t COIN_YEAR_REWARD = 7 * CENT; // 7% per year
 
 inline int64_t FutureDrift(int64_t nTime) { return nTime + 60 * 60 * 20; }
-inline unsigned int GetTargetSpacing(int nHeight) { return 300; } // Block target during PoW phase is 2,5min, after PoW its 5min
+inline unsigned int GetTargetSpacing(int nHeight) { return 300; } // 5 min block target for both PoW and PoS phase
 
 extern CScript COINBASE_FLAGS;
 extern CCriticalSection cs_main;
