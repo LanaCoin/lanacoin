@@ -119,10 +119,9 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
 
     if (!fProofOfStake)
     {
-        CPubKey pubkey;
-        if (!reservekey.GetReservedKey(pubkey))
+        // Post-quantum address from the fork on
+        if (!reservekey.GetReservedScript(txNew.vout[0].scriptPubKey))
             return NULL;
-        txNew.vout[0].scriptPubKey.SetDestination(pubkey.GetID());
     }
     else
     {

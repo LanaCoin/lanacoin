@@ -226,6 +226,20 @@ Value checkkernel(const Array& params, bool fHelp)
     result.push_back(Pair("blocktemplate", HexStr(ss.begin(), ss.end())));
     result.push_back(Pair("blocktemplatefees", nFees));
 
+    if (IsPQForkActive(pblock->nTime))
+    {
+        // After the post-quantum fork the block is signed with a
+        // post-quantum key; the coinstake commits to its hash
+        // (OP_RETURN <blocktemplatesignkeyhash> or a post-quantum address)
+        CPQPubKey pqpubkey;
+        if (!pMiningKey->GetReservedPQKey(pqpubkey))
+            throw JSONRPCError(RPC_MISC_ERROR, "GetReservedPQKey failed");
+        CPQKeyID keyID = pqpubkey.GetID();
+        result.push_back(Pair("blocktemplatesignkey", HexStr(pqpubkey.Raw())));
+        result.push_back(Pair("blocktemplatesignkeyhash", HexStr(keyID.begin(), keyID.end())));
+        return result;
+    }
+
     CPubKey pubkey;
     if (!pMiningKey->GetReservedKey(pubkey))
         throw JSONRPCError(RPC_MISC_ERROR, "GetReservedKey failed");
@@ -677,6 +691,26 @@ Value submitblock(const Array& params, bool fHelp)
 
             block.vtx.insert(block.vtx.begin() + 1, txCoinStake);
             block.hashMerkleRoot = block.BuildMerkleTree();
+
+            if (IsPQForkActive(block.nTime))
+            {
+                CPQPubKey pqpubkey;
+                if (!pMiningKey->GetReservedPQKey(pqpubkey))
+                    throw JSONRPCError(RPC_MISC_ERROR, "GetReservedPQKey failed");
+                CPQKey pqkey;
+                if (!pwalletMain->GetPQKey(pqpubkey.GetID(), pqkey))
+                    throw JSONRPCError(RPC_MISC_ERROR, "GetPQKey failed");
+                vector<unsigned char> vchSig;
+                if (!pqkey.Sign(block.GetHash(), vchSig, PQ_DOMAIN_BLOCK))
+                    throw JSONRPCError(RPC_MISC_ERROR, "Sign failed");
+                block.vchBlockSig = pqpubkey.Raw();
+                block.vchBlockSig.insert(block.vchBlockSig.end(), vchSig.begin(), vchSig.end());
+
+                bool fAcceptedPQ = ProcessBlock(NULL, &block);
+                if (!fAcceptedPQ)
+                    return "rejected";
+                return Value::null;
+            }
 
             CPubKey pubkey;
             if (!pMiningKey->GetReservedKey(pubkey))

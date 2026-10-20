@@ -2452,6 +2452,7 @@ bool CBlock::SignBlock(CWallet& wallet, int64_t nFees)
     static int64_t nLastCoinStakeSearchTime = GetAdjustedTime(); // startup timestamp
 
     CKey key;
+    CPQKey pqkey;
     CTransaction txCoinStake;
     txCoinStake.nTime &= ~STAKE_TIMESTAMP_MASK;
 
@@ -2460,8 +2461,15 @@ bool CBlock::SignBlock(CWallet& wallet, int64_t nFees)
     if (nSearchTime > nLastCoinStakeSearchTime)
     {
         int64_t nSearchInterval =  1;
-        if (wallet.CreateCoinStake(wallet, nBits, nSearchInterval, nFees, txCoinStake, key))
+        if (wallet.CreateCoinStake(wallet, nBits, nSearchInterval, nFees, txCoinStake, key, pqkey))
         {
+            // The transactions were selected with the post-quantum fork rules
+            // of the template time; if the coinstake time is on the other
+            // side of the fork or the ECDSA sunset, start over with a new
+            // template instead of producing an invalid block
+            if (GetPQScriptFlags(vtx[0].nTime) != GetPQScriptFlags(txCoinStake.nTime))
+                return false;
+
             if (txCoinStake.nTime >= pindexBest->GetPastTimeLimit()+1)
             {
                 // make sure coinstake would meet timestamp protocol
@@ -2476,7 +2484,17 @@ bool CBlock::SignBlock(CWallet& wallet, int64_t nFees)
                 vtx.insert(vtx.begin() + 1, txCoinStake);
                 hashMerkleRoot = BuildMerkleTree();
 
-                // append a signature to our block
+                // append a signature to our block: after the post-quantum
+                // fork the ML-DSA public key followed by the signature
+                if (IsPQForkActive(nTime))
+                {
+                    vector<unsigned char> vchSig;
+                    if (!pqkey.IsValid() || !pqkey.Sign(GetHash(), vchSig, PQ_DOMAIN_BLOCK))
+                        return false;
+                    vchBlockSig = pqkey.GetPubKey().Raw();
+                    vchBlockSig.insert(vchBlockSig.end(), vchSig.begin(), vchSig.end());
+                    return true;
+                }
                 return key.Sign(GetHash(), vchBlockSig);
             }
         }

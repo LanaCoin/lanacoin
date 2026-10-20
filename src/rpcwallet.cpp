@@ -105,17 +105,45 @@ Value getnewpubkey(const Array& params, bool fHelp)
 
 Value getnewaddress(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() > 1)
+    if (fHelp || params.size() > 2)
         throw runtime_error(
-            "getnewaddress [account]\n"
+            "getnewaddress [account] [type]\n"
             "Returns a new Lanacoin address for receiving payments.  "
             "If [account] is specified, it is added to the address book "
-            "so payments received with the address will be credited to [account].");
+            "so payments received with the address will be credited to [account].\n"
+            "[type] is \"postquantum\" (ML-DSA-44, LQ... addresses) or \"legacy\" (ECDSA). "
+            "The default is \"postquantum\" from the post-quantum upgrade on and \"legacy\" before it. "
+            "Post-quantum addresses can receive coins only after the upgrade, legacy ones only before it.");
 
     // Parse the account first so we don't generate a key if there's an error
     string strAccount;
     if (params.size() > 0)
         strAccount = AccountFromValue(params[0]);
+
+    bool fPostQuantum = pwalletMain->UsePostQuantum();
+    if (params.size() > 1)
+    {
+        string strType = params[1].get_str();
+        if (strType == "postquantum" || strType == "pq")
+            fPostQuantum = true;
+        else if (strType == "legacy")
+            fPostQuantum = false;
+        else
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Unknown address type, use \"postquantum\" or \"legacy\"");
+    }
+
+    if (fPostQuantum)
+    {
+        if (!pwalletMain->IsLocked())
+            pwalletMain->TopUpPQKeyPool();
+
+        CPQPubKey newKey;
+        if (!pwalletMain->GetPQKeyFromPool(newKey))
+            throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
+        CPQKeyID keyID = newKey.GetID();
+        pwalletMain->SetAddressBookName(keyID, strAccount);
+        return CBitcoinAddress(keyID).ToString();
+    }
 
     if (!pwalletMain->IsLocked())
         pwalletMain->TopUpKeyPool();
@@ -132,8 +160,45 @@ Value getnewaddress(const Array& params, bool fHelp)
 }
 
 
+// Post-quantum account address, after the post-quantum fork
+static CBitcoinAddress GetPQAccountAddress(string strAccount, bool bForceNew)
+{
+    CWalletDB walletdb(pwalletMain->strWalletFile);
+
+    CPQPubKey pubkey;
+    walletdb.ReadPQAccountKey(strAccount, pubkey);
+
+    bool bKeyUsed = false;
+    if (pubkey.IsValid())
+    {
+        CScript scriptPubKey;
+        scriptPubKey.SetDestination(pubkey.GetID());
+        for (map<uint256, CWalletTx>::iterator it = pwalletMain->mapWallet.begin();
+             it != pwalletMain->mapWallet.end() && !bKeyUsed; ++it)
+        {
+            BOOST_FOREACH(const CTxOut& txout, it->second.vout)
+                if (txout.scriptPubKey == scriptPubKey)
+                    bKeyUsed = true;
+        }
+    }
+
+    if (!pubkey.IsValid() || bForceNew || bKeyUsed)
+    {
+        if (!pwalletMain->GetPQKeyFromPool(pubkey))
+            throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
+        pwalletMain->SetAddressBookName(pubkey.GetID(), strAccount);
+        walletdb.WritePQAccountKey(strAccount, pubkey);
+    }
+
+    return CBitcoinAddress(pubkey.GetID());
+}
+
 CBitcoinAddress GetAccountAddress(string strAccount, bool bForceNew=false)
 {
+    // From the post-quantum fork on accounts receive on post-quantum addresses
+    if (pwalletMain->UsePostQuantum())
+        return GetPQAccountAddress(strAccount, bForceNew);
+
     CWalletDB walletdb(pwalletMain->strWalletFile);
 
     CAccount account;
@@ -677,6 +742,9 @@ Value sendmany(const Array& params, bool fHelp)
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Account has insufficient funds");
 
     // Send
+    string strDestError;
+    if (!pwalletMain->CheckSendDestinations(vecSend, strDestError))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strDestError);
     CReserveKey keyChange(pwalletMain);
     int64_t nFeeRequired = 0;
     bool fCreated = pwalletMain->CreateTransaction(vecSend, wtx, keyChange, nFeeRequired);
@@ -1292,9 +1360,13 @@ Value keypoolrefill(const Array& params, bool fHelp)
     EnsureWalletIsUnlocked();
 
     pwalletMain->TopUpKeyPool(nSize);
+    pwalletMain->TopUpPQKeyPool(nSize);
 
-    if (pwalletMain->GetKeyPoolSize() < nSize)
-        throw JSONRPCError(RPC_WALLET_ERROR, "Error refreshing keypool.");
+    {
+        LOCK(pwalletMain->cs_wallet);
+        if (pwalletMain->GetKeyPoolSize() < nSize || pwalletMain->GetPQKeyPoolSize() < nSize)
+            throw JSONRPCError(RPC_WALLET_ERROR, "Error refreshing keypool.");
+    }
 
     return Value::null;
 }
@@ -1339,6 +1411,7 @@ Value walletpassphrase(const Array& params, bool fHelp)
             "Stores the wallet decryption key in memory for <timeout> seconds.");
 
     pwalletMain->TopUpKeyPool();
+    pwalletMain->TopUpPQKeyPool();
 
     int64_t nSleepTime = params[1].get_int64();
     LOCK(cs_nWalletUnlockTime);

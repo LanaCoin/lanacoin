@@ -49,7 +49,8 @@ public:
         DuplicateAddress,
         TransactionCreationFailed, // Error returned when wallet is still locked
         TransactionCommitFailed,
-        Aborted
+        Aborted,
+        PostQuantumAddressMismatch // address type does not fit the post-quantum upgrade
     };
 
     enum EncryptionStatus
@@ -71,6 +72,10 @@ public:
 
     // Check address for validity
     bool validateAddress(const QString &address);
+    // Whether the post-quantum upgrade (hard fork) is active
+    bool isPostQuantumActive() const;
+    // Whether the wallet can spend from the address (legacy or post-quantum)
+    bool isMine(const QString &address) const;
 
     // Return status record for SendCoins, contains error id + information
     struct SendCoinsReturn

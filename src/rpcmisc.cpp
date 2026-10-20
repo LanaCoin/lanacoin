@@ -60,10 +60,20 @@ Value getinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("difficulty",    diff));
 
     obj.push_back(Pair("testnet",       TestNet()));
+
+    // Post-quantum hard fork (doc/pq-hardfork.md)
+    Object pq;
+    pq.push_back(Pair("algorithm",        "ML-DSA-44 (FIPS 204)"));
+    pq.push_back(Pair("forktime",         Params().PQForkTime()));
+    pq.push_back(Pair("ecdsasunsettime",  Params().ECDSASunsetTime()));
+    pq.push_back(Pair("active",           IsPQForkActive(GetAdjustedTime())));
+    pq.push_back(Pair("ecdsasunset",      IsECDSASunset(GetAdjustedTime())));
+    obj.push_back(Pair("postquantum",   pq));
 #ifdef ENABLE_WALLET
     if (pwalletMain) {
         obj.push_back(Pair("keypoololdest", (int64_t)pwalletMain->GetOldestKeyPoolTime()));
         obj.push_back(Pair("keypoolsize",   (int)pwalletMain->GetKeyPoolSize()));
+        obj.push_back(Pair("pqkeypoolsize", (int)pwalletMain->GetPQKeyPoolSize()));
     }
     obj.push_back(Pair("paytxfee",      ValueFromAmount(nTransactionFee)));
     obj.push_back(Pair("mininput",      ValueFromAmount(nMinimumInputValue)));

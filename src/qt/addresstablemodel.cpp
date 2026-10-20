@@ -345,9 +345,10 @@ QString AddressTableModel::addRow(const QString &type, const QString &label, con
     }
     else if(type == Receive)
     {
-        // Generate a new address to associate with given label
-        CPubKey newKey;
-        if(!wallet->GetKeyFromPool(newKey))
+        // Generate a new address to associate with given label; a
+        // post-quantum one from the post-quantum upgrade on
+        CTxDestination newDest;
+        if(!wallet->GetNewDestination(newDest, false))
         {
             WalletModel::UnlockContext ctx(walletModel->requestUnlock());
             if(!ctx.isValid())
@@ -356,13 +357,13 @@ QString AddressTableModel::addRow(const QString &type, const QString &label, con
                 editStatus = WALLET_UNLOCK_FAILURE;
                 return QString();
             }
-            if(!wallet->GetKeyFromPool(newKey))
+            if(!wallet->GetNewDestination(newDest, false))
             {
                 editStatus = KEY_GENERATION_FAILURE;
                 return QString();
             }
         }
-        strAddress = CBitcoinAddress(newKey.GetID()).ToString();
+        strAddress = CBitcoinAddress(newDest).ToString();
     }
     else
     {

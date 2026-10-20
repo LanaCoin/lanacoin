@@ -17,6 +17,9 @@ class CAccount;
 class CAccountingEntry;
 class CBlockLocator;
 class CKeyPool;
+class CPQKeyPool;
+class CPQKey;
+class CPQPubKey;
 class CMasterKey;
 class CScript;
 class CWallet;
@@ -101,6 +104,18 @@ public:
     bool ReadPool(int64_t nPool, CKeyPool& keypool);
     bool WritePool(int64_t nPool, const CKeyPool& keypool);
     bool ErasePool(int64_t nPool);
+
+    // Post-quantum keys (unknown to older clients, which skip these records)
+    bool WritePQKey(const CPQKey& key, const CKeyMetadata &keyMeta);
+    bool WriteCryptedPQKey(const CPQPubKey& pubkey, const std::vector<unsigned char>& vchCryptedSecret, const CKeyMetadata &keyMeta);
+    bool WriteCScript256(const uint256& hash, const CScript& redeemScript);
+    bool WritePQStakingKey(const CPQPubKey& pubkey);
+    // Current post-quantum receiving key of an account (getaccountaddress)
+    bool ReadPQAccountKey(const std::string& strAccount, CPQPubKey& pubkey);
+    bool WritePQAccountKey(const std::string& strAccount, const CPQPubKey& pubkey);
+    bool ReadPQPool(int64_t nPool, CPQKeyPool& keypool);
+    bool WritePQPool(int64_t nPool, const CPQKeyPool& keypool);
+    bool ErasePQPool(int64_t nPool);
 
     bool WriteMinVersion(int nVersion);
 

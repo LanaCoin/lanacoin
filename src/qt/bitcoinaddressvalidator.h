@@ -15,7 +15,8 @@ public:
 
     State validate(QString &input, int &pos) const;
 
-    static const int MaxAddressLength = 35;
+    // Post-quantum addresses (2 version bytes, 32 byte hash) are 52 characters
+    static const int MaxAddressLength = 52;
 };
 
 #endif // BITCOINADDRESSVALIDATOR_H

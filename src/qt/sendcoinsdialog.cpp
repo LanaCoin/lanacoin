@@ -213,6 +213,13 @@ void SendCoinsDialog::on_sendButton_clicked()
             tr("Error: Transaction creation failed!"),
             QMessageBox::Ok, QMessageBox::Ok);
         break;
+    case WalletModel::PostQuantumAddressMismatch:
+        QMessageBox::warning(this, tr("Send Coins"),
+            model->isPostQuantumActive() ?
+                tr("Since the post-quantum upgrade coins can only be sent to post-quantum (LQ...) addresses.") :
+                tr("Post-quantum (LQ...) addresses can receive coins only after the post-quantum upgrade."),
+            QMessageBox::Ok, QMessageBox::Ok);
+        break;
     case WalletModel::TransactionCommitFailed:
         QMessageBox::warning(this, tr("Send Coins"),
             tr("Error: The transaction was rejected. This might happen if some of the coins in your wallet were already spent, such as if you used a copy of wallet.dat and coins were spent in the copy but not marked as spent here."),
@@ -473,8 +480,8 @@ void SendCoinsDialog::coinControlChangeEdited(const QString & text)
             {
                 CPubKey pubkey;
                 CKeyID keyid;
-                CBitcoinAddress(text.toStdString()).GetKeyID(keyid);   
-                if (model->getPubKey(keyid, pubkey))
+                CBitcoinAddress(text.toStdString()).GetKeyID(keyid);
+                if (model->getPubKey(keyid, pubkey) || model->isMine(text))
                     ui->labelCoinControlChangeLabel->setText(tr("(no label)"));
                 else
                 {

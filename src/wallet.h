@@ -72,6 +72,33 @@ public:
     )
 };
 
+/** A post-quantum key pool entry */
+class CPQKeyPool
+{
+public:
+    int64_t nTime;
+    CPQPubKey pubkey;
+
+    CPQKeyPool()
+    {
+        nTime = GetTime();
+    }
+
+    CPQKeyPool(const CPQPubKey& pubkeyIn)
+    {
+        nTime = GetTime();
+        pubkey = pubkeyIn;
+    }
+
+    IMPLEMENT_SERIALIZE
+    (
+        if (!(nType & SER_GETHASH))
+            READWRITE(nVersion);
+        READWRITE(nTime);
+        READWRITE(pubkey);
+    )
+};
+
 /** A CWallet is an extension of a keystore, which also maintains a set of transactions and balances,
  * and provides the ability to create new transactions.
  */
@@ -102,6 +129,10 @@ public:
 
     std::set<int64_t> setKeyPool;
     std::map<CKeyID, CKeyMetadata> mapKeyMetadata;
+
+    // Post-quantum keys
+    std::set<int64_t> setPQKeyPool;
+    std::map<CPQKeyID, CKeyMetadata> mapPQKeyMetadata;
 
 
     typedef std::map<unsigned int, CMasterKey> MasterKeyMap;
@@ -165,6 +196,22 @@ public:
     bool AddCScript(const CScript& redeemScript);
     bool LoadCScript(const CScript& redeemScript);
 
+    // Post-quantum keys and P2SH256 scripts (stored in the wallet file)
+    CPQPubKey GenerateNewPQKey();
+    bool AddPQKey(const CPQKey& key);
+    bool LoadPQKey(const CPQKey& key) { return CCryptoKeyStore::AddPQKey(key); }
+    bool AddCryptedPQKey(const CPQPubKey &pubkey, const std::vector<unsigned char> &vchCryptedSecret);
+    bool LoadCryptedPQKey(const CPQPubKey &pubkey, const std::vector<unsigned char> &vchCryptedSecret)
+    {
+        return CCryptoKeyStore::AddCryptedPQKey(pubkey, vchCryptedSecret);
+    }
+    bool LoadPQKeyMetadata(const CPQPubKey &pubkey, const CKeyMetadata &metadata);
+    bool AddCScript256(const CScript& redeemScript);
+    bool LoadCScript256(const CScript& redeemScript) { return CCryptoKeyStore::AddCScript256(redeemScript); }
+
+    // Whether new addresses and change are post-quantum: from the fork on
+    bool UsePostQuantum() const { return IsPQForkActive(GetAdjustedTime()); }
+
     bool Unlock(const SecureString& strWalletPassphrase);
     bool ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase);
     bool EncryptWallet(const SecureString& strWalletPassphrase);
@@ -200,12 +247,19 @@ public:
     int64_t GetImmatureBalance() const;
     int64_t GetStake() const;
     int64_t GetNewMint() const;
+    // Outputs must match the post-quantum fork: quantum safe after it, and
+    // no post-quantum outputs before it (they could not be spent yet)
+    bool CheckSendDestinations(const std::vector<std::pair<CScript, int64_t> >& vecSend, std::string& strError) const;
     bool CreateTransaction(const std::vector<std::pair<CScript, int64_t> >& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
     bool CreateTransaction(CScript scriptPubKey, int64_t nValue, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
     bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);
 
     uint64_t GetStakeWeight() const;
-    bool CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CTransaction& txNew, CKey& key);
+    // key signs the block before the post-quantum fork, pqkey after it
+    bool CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CTransaction& txNew, CKey& key, CPQKey& pqkey);
+    // The post-quantum address ECDSA coins move to when they stake after the fork
+    bool GetPQStakingKey(CPQKey& keyOut);
+    CPQKeyID pqStakingKeyID;
 
     std::string SendMoney(CScript scriptPubKey, int64_t nValue, CWalletTx& wtxNew, bool fAskFee=false);
     std::string SendMoneyToDestination(const CTxDestination &address, int64_t nValue, CWalletTx& wtxNew, bool fAskFee=false); 
@@ -219,6 +273,22 @@ public:
     bool GetKeyFromPool(CPubKey &key);
     int64_t GetOldestKeyPoolTime();
     void GetAllReserveKeys(std::set<CKeyID>& setAddress) const;
+
+    // Post-quantum key pool, same semantics as the ECDSA key pool
+    bool NewPQKeyPool();
+    bool TopUpPQKeyPool(unsigned int nSize = 0);
+    void ReserveKeyFromPQKeyPool(int64_t& nIndex, CPQKeyPool& keypool);
+    void KeepPQKey(int64_t nIndex);
+    void ReturnPQKey(int64_t nIndex);
+    bool GetPQKeyFromPool(CPQPubKey &pubkey);
+    unsigned int GetPQKeyPoolSize()
+    {
+        AssertLockHeld(cs_wallet); // setPQKeyPool
+        return setPQKeyPool.size();
+    }
+    // A new receiving destination: post-quantum from the fork on (or when
+    // fPostQuantum is set), else ECDSA
+    bool GetNewDestination(CTxDestination &dest, bool fPostQuantum);
 
     std::set< std::set<CTxDestination> > GetAddressGroupings();
     std::map<CTxDestination, int64_t> GetAddressBalances();
@@ -337,17 +407,20 @@ public:
     boost::signals2::signal<void (CWallet *wallet, const uint256 &hashTx, ChangeType status)> NotifyTransactionChanged;
 };
 
-/** A key allocated from the key pool. */
+/** A key allocated from the key pool (ECDSA and/or post-quantum). */
 class CReserveKey
 {
 protected:
     CWallet* pwallet;
     int64_t nIndex;
     CPubKey vchPubKey;
+    int64_t nPQIndex;
+    CPQPubKey pqPubKey;
 public:
     CReserveKey(CWallet* pwalletIn)
     {
         nIndex = -1;
+        nPQIndex = -1;
         pwallet = pwalletIn;
     }
 
@@ -358,6 +431,9 @@ public:
 
     void ReturnKey();
     bool GetReservedKey(CPubKey &pubkey);
+    bool GetReservedPQKey(CPQPubKey &pubkey);
+    // Script paying to a reserved key: post-quantum from the fork on
+    bool GetReservedScript(CScript &script);
     void KeepKey();
 };
 

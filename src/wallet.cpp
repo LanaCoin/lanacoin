@@ -121,6 +121,67 @@ bool CWallet::AddCScript(const CScript& redeemScript)
     return CWalletDB(strWalletFile).WriteCScript(Hash160(redeemScript), redeemScript);
 }
 
+CPQPubKey CWallet::GenerateNewPQKey()
+{
+    AssertLockHeld(cs_wallet); // mapPQKeyMetadata
+
+    RandAddSeedPerfmon();
+    CPQKey key;
+    key.MakeNewKey();
+    const CPQPubKey& pubkey = key.GetPubKey();
+
+    int64_t nCreationTime = GetTime();
+    mapPQKeyMetadata[pubkey.GetID()] = CKeyMetadata(nCreationTime);
+    if (!nTimeFirstKey || nCreationTime < nTimeFirstKey)
+        nTimeFirstKey = nCreationTime;
+
+    if (!AddPQKey(key))
+        throw std::runtime_error("CWallet::GenerateNewPQKey() : AddPQKey failed");
+    return pubkey;
+}
+
+bool CWallet::AddPQKey(const CPQKey& key)
+{
+    AssertLockHeld(cs_wallet); // mapPQKeyMetadata
+    if (!CCryptoKeyStore::AddPQKey(key))
+        return false;
+    if (!fFileBacked)
+        return true;
+    if (!IsCrypted())
+        return CWalletDB(strWalletFile).WritePQKey(key, mapPQKeyMetadata[key.GetPubKey().GetID()]);
+    return true;
+}
+
+bool CWallet::AddCryptedPQKey(const CPQPubKey &pubkey, const std::vector<unsigned char> &vchCryptedSecret)
+{
+    if (!CCryptoKeyStore::AddCryptedPQKey(pubkey, vchCryptedSecret))
+        return false;
+    if (!fFileBacked)
+        return true;
+    LOCK(cs_wallet);
+    if (pwalletdbEncryption)
+        return pwalletdbEncryption->WriteCryptedPQKey(pubkey, vchCryptedSecret, mapPQKeyMetadata[pubkey.GetID()]);
+    return CWalletDB(strWalletFile).WriteCryptedPQKey(pubkey, vchCryptedSecret, mapPQKeyMetadata[pubkey.GetID()]);
+}
+
+bool CWallet::LoadPQKeyMetadata(const CPQPubKey &pubkey, const CKeyMetadata &meta)
+{
+    AssertLockHeld(cs_wallet); // mapPQKeyMetadata
+    if (meta.nCreateTime && (!nTimeFirstKey || meta.nCreateTime < nTimeFirstKey))
+        nTimeFirstKey = meta.nCreateTime;
+    mapPQKeyMetadata[pubkey.GetID()] = meta;
+    return true;
+}
+
+bool CWallet::AddCScript256(const CScript& redeemScript)
+{
+    if (!CCryptoKeyStore::AddCScript256(redeemScript))
+        return false;
+    if (!fFileBacked)
+        return true;
+    return CWalletDB(strWalletFile).WriteCScript256(redeemScript.GetID256(), redeemScript);
+}
+
 // optional setting to unlock wallet for staking only
 // serves to disable the trivial sendmoney when OS account compromised
 // provides no real security
@@ -322,6 +383,9 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         Lock();
         Unlock(strWalletPassphrase);
         NewKeyPool();
+        // The post-quantum pool keys may be in unencrypted backups too
+        if (!setPQKeyPool.empty())
+            NewPQKeyPool();
         Lock();
 
         // Need to completely rewrite the wallet file; if we don't, bdb might keep
@@ -1388,6 +1452,41 @@ bool CWallet::SelectCoinsForStaking(int64_t nTargetValue, unsigned int nSpendTim
     return true;
 }
 
+bool CWallet::CheckSendDestinations(const vector<pair<CScript, int64_t> >& vecSend, string& strError) const
+{
+    if (UsePostQuantum())
+    {
+        // After the post-quantum fork only quantum safe outputs are valid
+        CTransaction tx;
+        BOOST_FOREACH(const PAIRTYPE(CScript, int64_t)& s, vecSend)
+            tx.vout.push_back(CTxOut(s.second, s.first));
+        if (!CheckPQOutputs(tx, strError))
+        {
+            strError = _("Since the post-quantum upgrade coins can only be sent to post-quantum (LQ...) addresses.");
+            return false;
+        }
+        return true;
+    }
+
+    // Before the fork post-quantum outputs could not be spent yet
+    BOOST_FOREACH(const PAIRTYPE(CScript, int64_t)& s, vecSend)
+    {
+        if (s.first.IsPayToScriptHash256())
+        {
+            strError = _("Post-quantum addresses can receive coins only after the post-quantum upgrade.");
+            return false;
+        }
+        txnouttype whichType;
+        vector<valtype> vSolutions;
+        if (Solver(s.first, whichType, vSolutions) && whichType == TX_PQKEYHASH)
+        {
+            strError = _("Post-quantum addresses can receive coins only after the post-quantum upgrade.");
+            return false;
+        }
+    }
+    return true;
+}
+
 bool CWallet::CreateTransaction(const vector<pair<CScript, int64_t> >& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl* coinControl)
 {
     int64_t nValue = 0;
@@ -1399,6 +1498,17 @@ bool CWallet::CreateTransaction(const vector<pair<CScript, int64_t> >& vecSend, 
     }
     if (vecSend.empty() || nValue < 0)
         return false;
+
+    string strError;
+    if (!CheckSendDestinations(vecSend, strError))
+        return error("CreateTransaction() : %s", strError);
+    if (coinControl && !boost::get<CNoDestination>(&coinControl->destChange))
+    {
+        CScript scriptChange;
+        scriptChange.SetDestination(coinControl->destChange);
+        if (!CheckSendDestinations(vector<pair<CScript, int64_t> >(1, make_pair(scriptChange, (int64_t)1)), strError))
+            return error("CreateTransaction() : change address: %s", strError);
+    }
 
     wtxNew.BindWallet(this);
 
@@ -1476,13 +1586,10 @@ bool CWallet::CreateTransaction(const vector<pair<CScript, int64_t> >& vecSend, 
                         //  rediscover unknown transactions that were written with keys of ours to recover
                         //  post-backup change.
 
-                        // Reserve a new key pair from key pool
-                        CPubKey vchPubKey;
-                        bool ret;
-                        ret = reservekey.GetReservedKey(vchPubKey);
-                        assert(ret); // should never fail, as we just unlocked
-
-                        scriptChange.SetDestination(vchPubKey.GetID());
+                        // Reserve a new key pair from key pool; a
+                        // post-quantum one from the fork on
+                        if (!reservekey.GetReservedScript(scriptChange))
+                            return false;
                     }
 
                     // Insert change txn at random position:
@@ -1575,7 +1682,23 @@ uint64_t CWallet::GetStakeWeight() const
     return nWeight;
 }
 
-bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CTransaction& txNew, CKey& key)
+bool CWallet::GetPQStakingKey(CPQKey& keyOut)
+{
+    LOCK(cs_wallet);
+    if (pqStakingKeyID == 0 || !HavePQKey(pqStakingKeyID))
+    {
+        CPQPubKey pubkey;
+        if (!GetPQKeyFromPool(pubkey))
+            return false;
+        pqStakingKeyID = pubkey.GetID();
+        SetAddressBookName(pqStakingKeyID, "");
+        if (fFileBacked && !CWalletDB(strWalletFile).WritePQStakingKey(pubkey))
+            return false;
+    }
+    return GetPQKey(pqStakingKeyID, keyOut);
+}
+
+bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CTransaction& txNew, CKey& key, CPQKey& pqkey)
 {
     CBlockIndex* pindexPrev = pindexBest;
     CBigNum bnTargetPerCoinDay;
@@ -1621,7 +1744,23 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
             // Search nSearchInterval seconds back up to nMaxStakeSearchInterval
             COutPoint prevoutStake = COutPoint(pcoin.first->GetHash(), pcoin.second);
             int64_t nBlockTime;
-            if (CheckKernel(pindexPrev, nBits, txNew.nTime - n, prevoutStake, &nBlockTime))
+
+            // Post-quantum fork rules at the coinstake (= block) time
+            const int64_t nTimeTx = txNew.nTime - n;
+            const bool fPQFork = IsPQForkActive(nTimeTx);
+            const bool fECDSASunset = IsECDSASunset(nTimeTx);
+            {
+                vector<valtype> vSolutionsCoin;
+                txnouttype whichTypeCoin;
+                if (!Solver(pcoin.first->vout[pcoin.second].scriptPubKey, whichTypeCoin, vSolutionsCoin))
+                    break;
+                // Post-quantum coins can stake from the fork on, ECDSA
+                // coins until the ECDSA sunset
+                if (whichTypeCoin == TX_PQKEYHASH ? !fPQFork : fECDSASunset)
+                    break;
+            }
+
+            if (CheckKernel(pindexPrev, nBits, nTimeTx, prevoutStake, &nBlockTime))
             {
                 // Found a kernel
                 LogPrint("coinstake", "CreateCoinStake : kernel found\n");
@@ -1635,12 +1774,40 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
                     break;
                 }
                 LogPrint("coinstake", "CreateCoinStake : parsed kernel type=%d\n", whichType);
-                if (whichType != TX_PUBKEY && whichType != TX_PUBKEYHASH)
+                if (whichType != TX_PUBKEY && whichType != TX_PUBKEYHASH && whichType != TX_PQKEYHASH)
                 {
                     LogPrint("coinstake", "CreateCoinStake : no support for kernel type=%d\n", whichType);
-                    break;  // only support pay to public key and pay to address
+                    break;  // only support pay to public key, pay to address and post-quantum address
                 }
-                if (whichType == TX_PUBKEYHASH) // pay to address type
+                if (whichType == TX_PQKEYHASH)
+                {
+                    // Post-quantum coins stay on their address, the block
+                    // is signed with the same key
+                    if (!keystore.GetPQKey(CPQKeyID(uint256(vSolutions[0])), pqkey))
+                    {
+                        LogPrint("coinstake", "CreateCoinStake : failed to get post-quantum key for kernel\n");
+                        break;
+                    }
+                    scriptPubKeyOut = scriptPubKeyKernel;
+                }
+                else if (fPQFork)
+                {
+                    // ECDSA coins move to the wallet's post-quantum staking
+                    // address, which signs the block. The kernel input itself
+                    // is still signed with ECDSA (valid until the sunset).
+                    if (!keystore.HaveKey(whichType == TX_PUBKEYHASH ? CKeyID(uint160(vSolutions[0])) : CPubKey(vSolutions[0]).GetID()))
+                    {
+                        LogPrint("coinstake", "CreateCoinStake : failed to get key for kernel type=%d\n", whichType);
+                        break;
+                    }
+                    if (!GetPQStakingKey(pqkey))
+                    {
+                        LogPrint("coinstake", "CreateCoinStake : no post-quantum staking key (wallet locked?)\n");
+                        break;
+                    }
+                    scriptPubKeyOut.SetDestination(pqkey.GetPubKey().GetID());
+                }
+                else if (whichType == TX_PUBKEYHASH) // pay to address type
                 {
                     // convert to pay to public key type
                     if (!keystore.GetKey(uint160(vSolutions[0]), key))
@@ -1650,7 +1817,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
                     }
                     scriptPubKeyOut << key.GetPubKey() << OP_CHECKSIG;
                 }
-                if (whichType == TX_PUBKEY)
+                else if (whichType == TX_PUBKEY)
                 {
                     valtype& vchPubKey = vSolutions[0];
                     if (!keystore.GetKey(Hash160(vchPubKey), key))
@@ -1822,6 +1989,13 @@ string CWallet::SendMoney(CScript scriptPubKey, int64_t nValue, CWalletTx& wtxNe
     {
         string strError = _("Error: Wallet unlocked for staking only, unable to create transaction.");
         LogPrintf("SendMoney() : %s", strError);
+        return strError;
+    }
+    string strDestError;
+    if (!CheckSendDestinations(vector<pair<CScript, int64_t> >(1, make_pair(scriptPubKey, nValue)), strDestError))
+    {
+        string strError = _("Error: ") + strDestError;
+        LogPrintf("SendMoney() : %s\n", strError);
         return strError;
     }
     if (!CreateTransaction(scriptPubKey, nValue, wtxNew, reservekey, nFeeRequired))
@@ -1999,7 +2173,11 @@ void CWallet::ReserveKeyFromKeyPool(int64_t& nIndex, CKeyPool& keypool)
         LOCK(cs_wallet);
 
         if (!IsLocked())
+        {
             TopUpKeyPool();
+            // Keep post-quantum keys ready (and in backups) before the fork too
+            TopUpPQKeyPool();
+        }
 
         // Get the oldest key
         if(setKeyPool.empty())
@@ -2070,6 +2248,139 @@ bool CWallet::GetKeyFromPool(CPubKey& result)
         KeepKey(nIndex);
         result = keypool.vchPubKey;
     }
+    return true;
+}
+
+//
+// Post-quantum key pool
+//
+
+bool CWallet::NewPQKeyPool()
+{
+    LOCK(cs_wallet);
+    CWalletDB walletdb(strWalletFile);
+    BOOST_FOREACH(int64_t nIndex, setPQKeyPool)
+        walletdb.ErasePQPool(nIndex);
+    setPQKeyPool.clear();
+
+    if (IsLocked())
+        return false;
+
+    int64_t nKeys = max(GetArg("-keypool", 100), (int64_t)0);
+    for (int i = 0; i < nKeys; i++)
+    {
+        int64_t nIndex = i+1;
+        walletdb.WritePQPool(nIndex, CPQKeyPool(GenerateNewPQKey()));
+        setPQKeyPool.insert(nIndex);
+    }
+    LogPrintf("CWallet::NewPQKeyPool wrote %d new keys\n", nKeys);
+    return true;
+}
+
+bool CWallet::TopUpPQKeyPool(unsigned int nSize)
+{
+    LOCK(cs_wallet);
+
+    if (IsLocked())
+        return false;
+
+    CWalletDB walletdb(strWalletFile);
+
+    unsigned int nTargetSize;
+    if (nSize > 0)
+        nTargetSize = nSize;
+    else
+        nTargetSize = max(GetArg("-keypool", 100), (int64_t)0);
+
+    while (setPQKeyPool.size() < (nTargetSize + 1))
+    {
+        int64_t nEnd = 1;
+        if (!setPQKeyPool.empty())
+            nEnd = *(--setPQKeyPool.end()) + 1;
+        if (!walletdb.WritePQPool(nEnd, CPQKeyPool(GenerateNewPQKey())))
+            throw runtime_error("TopUpPQKeyPool() : writing generated key failed");
+        setPQKeyPool.insert(nEnd);
+        LogPrint("pqkeypool", "post-quantum keypool added key %d, size=%u\n", nEnd, setPQKeyPool.size());
+    }
+    return true;
+}
+
+void CWallet::ReserveKeyFromPQKeyPool(int64_t& nIndex, CPQKeyPool& keypool)
+{
+    nIndex = -1;
+    keypool.pubkey = CPQPubKey();
+
+    LOCK(cs_wallet);
+
+    if (!IsLocked())
+        TopUpPQKeyPool();
+
+    // Get the oldest key
+    if (setPQKeyPool.empty())
+        return;
+
+    CWalletDB walletdb(strWalletFile);
+
+    nIndex = *(setPQKeyPool.begin());
+    setPQKeyPool.erase(setPQKeyPool.begin());
+    if (!walletdb.ReadPQPool(nIndex, keypool))
+        throw runtime_error("ReserveKeyFromPQKeyPool() : read failed");
+    if (!HavePQKey(keypool.pubkey.GetID()))
+        throw runtime_error("ReserveKeyFromPQKeyPool() : unknown key in key pool");
+    assert(keypool.pubkey.IsValid());
+    LogPrint("pqkeypool", "post-quantum keypool reserve %d\n", nIndex);
+}
+
+void CWallet::KeepPQKey(int64_t nIndex)
+{
+    if (fFileBacked)
+    {
+        CWalletDB walletdb(strWalletFile);
+        walletdb.ErasePQPool(nIndex);
+    }
+    LogPrint("pqkeypool", "post-quantum keypool keep %d\n", nIndex);
+}
+
+void CWallet::ReturnPQKey(int64_t nIndex)
+{
+    {
+        LOCK(cs_wallet);
+        setPQKeyPool.insert(nIndex);
+    }
+    LogPrint("pqkeypool", "post-quantum keypool return %d\n", nIndex);
+}
+
+bool CWallet::GetPQKeyFromPool(CPQPubKey& result)
+{
+    int64_t nIndex = 0;
+    CPQKeyPool keypool;
+    LOCK(cs_wallet);
+    ReserveKeyFromPQKeyPool(nIndex, keypool);
+    if (nIndex == -1)
+    {
+        if (IsLocked()) return false;
+        result = GenerateNewPQKey();
+        return true;
+    }
+    KeepPQKey(nIndex);
+    result = keypool.pubkey;
+    return true;
+}
+
+bool CWallet::GetNewDestination(CTxDestination &dest, bool fPostQuantum)
+{
+    if (fPostQuantum || UsePostQuantum())
+    {
+        CPQPubKey pubkey;
+        if (!GetPQKeyFromPool(pubkey))
+            return false;
+        dest = pubkey.GetID();
+        return true;
+    }
+    CPubKey pubkey;
+    if (!GetKeyFromPool(pubkey))
+        return false;
+    dest = pubkey.GetID();
     return true;
 }
 
@@ -2301,12 +2612,48 @@ bool CReserveKey::GetReservedKey(CPubKey& pubkey)
     return true;
 }
 
+bool CReserveKey::GetReservedPQKey(CPQPubKey& pubkey)
+{
+    if (nPQIndex == -1)
+    {
+        CPQKeyPool keypool;
+        pwallet->ReserveKeyFromPQKeyPool(nPQIndex, keypool);
+        if (nPQIndex == -1)
+            return false;
+        pqPubKey = keypool.pubkey;
+    }
+    assert(pqPubKey.IsValid());
+    pubkey = pqPubKey;
+    return true;
+}
+
+bool CReserveKey::GetReservedScript(CScript& script)
+{
+    if (pwallet->UsePostQuantum())
+    {
+        CPQPubKey pubkey;
+        if (!GetReservedPQKey(pubkey))
+            return false;
+        script.SetDestination(pubkey.GetID());
+        return true;
+    }
+    CPubKey pubkey;
+    if (!GetReservedKey(pubkey))
+        return false;
+    script.SetDestination(pubkey.GetID());
+    return true;
+}
+
 void CReserveKey::KeepKey()
 {
     if (nIndex != -1)
         pwallet->KeepKey(nIndex);
     nIndex = -1;
     vchPubKey = CPubKey();
+    if (nPQIndex != -1)
+        pwallet->KeepPQKey(nPQIndex);
+    nPQIndex = -1;
+    pqPubKey = CPQPubKey();
 }
 
 void CReserveKey::ReturnKey()
@@ -2315,6 +2662,10 @@ void CReserveKey::ReturnKey()
         pwallet->ReturnKey(nIndex);
     nIndex = -1;
     vchPubKey = CPubKey();
+    if (nPQIndex != -1)
+        pwallet->ReturnPQKey(nPQIndex);
+    nPQIndex = -1;
+    pqPubKey = CPQPubKey();
 }
 
 void CWallet::GetAllReserveKeys(set<CKeyID>& setAddress) const

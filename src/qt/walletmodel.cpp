@@ -144,6 +144,17 @@ bool WalletModel::validateAddress(const QString &address)
     return addressParsed.IsValid();
 }
 
+bool WalletModel::isPostQuantumActive() const
+{
+    return wallet->UsePostQuantum();
+}
+
+bool WalletModel::isMine(const QString &address) const
+{
+    CBitcoinAddress addr(address.toStdString());
+    return addr.IsValid() && IsMine(*wallet, addr.Get());
+}
+
 WalletModel::SendCoinsReturn WalletModel::sendCoins(const QList<SendCoinsRecipient> &recipients, const CCoinControl *coinControl)
 {
     qint64 total = 0;
@@ -198,6 +209,12 @@ WalletModel::SendCoinsReturn WalletModel::sendCoins(const QList<SendCoinsRecipie
             CScript scriptPubKey;
             scriptPubKey.SetDestination(CBitcoinAddress(rcp.address.toStdString()).Get());
             vecSend.push_back(make_pair(scriptPubKey, rcp.amount));
+        }
+
+        std::string strDestError;
+        if (!wallet->CheckSendDestinations(vecSend, strDestError))
+        {
+            return PostQuantumAddressMismatch;
         }
 
         CWalletTx wtx;

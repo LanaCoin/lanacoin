@@ -468,19 +468,22 @@ void CoinControlDialog::updateLabels(WalletModel *model, QDialog* dialog)
         {
             CPubKey pubkey;
             CKeyID *keyid = boost::get< CKeyID >(&address);
-            if (keyid && model->getPubKey(*keyid, pubkey))
+            if (boost::get< CPQKeyID >(&address))
+                nBytesInputs += 3783; // ML-DSA-44 signature (2420+1) and public key (1313)
+            else if (keyid && model->getPubKey(*keyid, pubkey))
                 nBytesInputs += (pubkey.IsCompressed() ? 148 : 180);
             else
                 nBytesInputs += 148; // in all error cases, simply assume 148 here
         }
         else nBytesInputs += 148;
     }
-    
+
     // calculation
     if (nQuantity > 0)
     {
-        // Bytes
-        nBytes = nBytesInputs + ((CoinControlDialog::payAmounts.size() > 0 ? CoinControlDialog::payAmounts.size() + 1 : 2) * 34) + 10; // always assume +1 output for change here
+        // Bytes; post-quantum outputs are 46 bytes, legacy ones 34
+        int nBytesOutput = model->isPostQuantumActive() ? 46 : 34;
+        nBytes = nBytesInputs + ((CoinControlDialog::payAmounts.size() > 0 ? CoinControlDialog::payAmounts.size() + 1 : 2) * nBytesOutput) + 10; // always assume +1 output for change here
         
         // Priority
         dPriority = dPriorityInputs / nBytes;
@@ -633,7 +636,9 @@ void CoinControlDialog::updateView()
                     
                 CPubKey pubkey;
                 CKeyID *keyid = boost::get< CKeyID >(&outputAddress);
-                if (keyid && model->getPubKey(*keyid, pubkey) && !pubkey.IsCompressed())
+                if (boost::get< CPQKeyID >(&outputAddress))
+                    nInputSize = 3783; // post-quantum signature and public key
+                else if (keyid && model->getPubKey(*keyid, pubkey) && !pubkey.IsCompressed())
                     nInputSize = 180;
             }
 

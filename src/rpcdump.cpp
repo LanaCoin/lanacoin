@@ -120,6 +120,36 @@ Value importprivkey(const Array& params, bool fHelp)
     if (params.size() > 2)
         fRescan = params[2].get_bool();
 
+    // Post-quantum key (LK...)
+    CPQSecret pqSecret;
+    if (pqSecret.SetString(strSecret))
+    {
+        if (fWalletUnlockStakingOnly)
+            throw JSONRPCError(RPC_WALLET_UNLOCK_NEEDED, "Wallet is unlocked for staking only.");
+        CPQKey pqkey;
+        if (!pqSecret.GetKey(pqkey))
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid private key");
+        CPQKeyID keyID = pqkey.GetPubKey().GetID();
+
+        LOCK2(cs_main, pwalletMain->cs_wallet);
+        pwalletMain->MarkDirty();
+        pwalletMain->SetAddressBookName(keyID, strLabel);
+        if (pwalletMain->HavePQKey(keyID))
+            return Value::null;
+
+        // Post-quantum keys are not older than the fork
+        pwalletMain->mapPQKeyMetadata[keyID].nCreateTime = 1;
+        if (!pwalletMain->AddPQKey(pqkey))
+            throw JSONRPCError(RPC_WALLET_ERROR, "Error adding key to wallet");
+        pwalletMain->nTimeFirstKey = 1;
+
+        if (fRescan) {
+            pwalletMain->ScanForWalletTransactions(pindexGenesisBlock, true);
+            pwalletMain->ReacceptWalletTransactions();
+        }
+        return Value::null;
+    }
+
     CBitcoinSecret vchSecret;
     bool fGood = vchSecret.SetString(strSecret);
 
@@ -185,6 +215,43 @@ Value importwallet(const Array& params, bool fHelp)
         boost::split(vstr, line, boost::is_any_of(" "));
         if (vstr.size() < 2)
             continue;
+
+        // Post-quantum key
+        CPQSecret pqSecret;
+        CPQKey pqkey;
+        if (pqSecret.SetString(vstr[0]) && pqSecret.GetKey(pqkey))
+        {
+            CPQKeyID pqid = pqkey.GetPubKey().GetID();
+            if (pwalletMain->HavePQKey(pqid))
+                continue;
+            int64_t nTime = DecodeDumpTime(vstr[1]);
+            std::string strLabel;
+            bool fLabel = true;
+            for (unsigned int nStr = 2; nStr < vstr.size(); nStr++) {
+                if (boost::algorithm::starts_with(vstr[nStr], "#"))
+                    break;
+                if (vstr[nStr] == "change=1" || vstr[nStr] == "reserve=1")
+                    fLabel = false;
+                if (boost::algorithm::starts_with(vstr[nStr], "label=")) {
+                    strLabel = DecodeDumpString(vstr[nStr].substr(6));
+                    fLabel = true;
+                }
+            }
+            LogPrintf("Importing %s...\n", CBitcoinAddress(pqid).ToString());
+            {
+                LOCK(pwalletMain->cs_wallet);
+                pwalletMain->mapPQKeyMetadata[pqid].nCreateTime = nTime;
+                if (!pwalletMain->AddPQKey(pqkey)) {
+                    fGood = false;
+                    continue;
+                }
+            }
+            if (fLabel)
+                pwalletMain->SetAddressBookName(pqid, strLabel);
+            nTimeBegin = std::min(nTimeBegin, nTime);
+            continue;
+        }
+
         CBitcoinSecret vchSecret;
         if (!vchSecret.SetString(vstr[0]))
             continue;
@@ -256,6 +323,14 @@ Value dumpprivkey(const Array& params, bool fHelp)
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Lanacoin address");
     if (fWalletUnlockStakingOnly)
         throw JSONRPCError(RPC_WALLET_UNLOCK_NEEDED, "Wallet is unlocked for staking only.");
+    CPQKeyID pqKeyID;
+    if (address.GetPQKeyID(pqKeyID))
+    {
+        CPQKey pqkey;
+        if (!pwalletMain->GetPQKey(pqKeyID, pqkey))
+            throw JSONRPCError(RPC_WALLET_ERROR, "Private key for address " + strAddress + " is not known");
+        return CPQSecret(pqkey).ToString();
+    }
     CKeyID keyID;
     if (!address.GetKeyID(keyID))
         throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to a key");
@@ -315,6 +390,44 @@ Value dumpwallet(const Array& params, bool fHelp)
             } else {
                 file << strprintf("%s %s change=1 # addr=%s\n", CBitcoinSecret(key).ToString(), strTime, strAddr);
             }
+        }
+    }
+
+    // Post-quantum keys
+    {
+        LOCK(pwalletMain->cs_wallet);
+        std::set<CPQKeyID> setPQKeyPool;
+        CWalletDB walletdb(pwalletMain->strWalletFile);
+        BOOST_FOREACH(int64_t nIndex, pwalletMain->setPQKeyPool)
+        {
+            CPQKeyPool keypool;
+            if (walletdb.ReadPQPool(nIndex, keypool))
+                setPQKeyPool.insert(keypool.pubkey.GetID());
+        }
+
+        std::set<CPQKeyID> setPQKeys;
+        pwalletMain->GetPQKeys(setPQKeys);
+        std::vector<std::pair<int64_t, CPQKeyID> > vPQKeyBirth;
+        BOOST_FOREACH(const CPQKeyID& keyid, setPQKeys)
+            vPQKeyBirth.push_back(std::make_pair(pwalletMain->mapPQKeyMetadata[keyid].nCreateTime, keyid));
+        std::sort(vPQKeyBirth.begin(), vPQKeyBirth.end());
+
+        if (!vPQKeyBirth.empty())
+            file << "\n# Post-quantum (ML-DSA-44) keys\n";
+        for (std::vector<std::pair<int64_t, CPQKeyID> >::const_iterator it = vPQKeyBirth.begin(); it != vPQKeyBirth.end(); it++) {
+            const CPQKeyID &keyid = it->second;
+            std::string strTime = EncodeDumpTime(it->first);
+            std::string strAddr = CBitcoinAddress(keyid).ToString();
+            CPQKey key;
+            if (!pwalletMain->GetPQKey(keyid, key))
+                continue;
+            std::string strSecret = CPQSecret(key).ToString();
+            if (pwalletMain->mapAddressBook.count(keyid))
+                file << strprintf("%s %s label=%s # addr=%s\n", strSecret, strTime, EncodeDumpString(pwalletMain->mapAddressBook[keyid]), strAddr);
+            else if (setPQKeyPool.count(keyid))
+                file << strprintf("%s %s reserve=1 # addr=%s\n", strSecret, strTime, strAddr);
+            else
+                file << strprintf("%s %s change=1 # addr=%s\n", strSecret, strTime, strAddr);
         }
     }
     file << "\n";

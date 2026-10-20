@@ -101,6 +101,77 @@ bool CWalletDB::WriteCScript(const uint160& hash, const CScript& redeemScript)
     return Write(std::make_pair(std::string("cscript"), hash), redeemScript, false);
 }
 
+bool CWalletDB::WritePQKey(const CPQKey& key, const CKeyMetadata& keyMeta)
+{
+    nWalletDBUpdated++;
+    const CPQPubKey& pubkey = key.GetPubKey();
+
+    if (!Write(std::make_pair(std::string("pqkeymeta"), pubkey), keyMeta, false))
+        return false;
+
+    // Seed with a checksum over public key and seed, like "key" records
+    CPrivKey vchSeed(key.begin(), key.end());
+    std::vector<unsigned char, secure_allocator<unsigned char> > vchKey(pubkey.Raw().begin(), pubkey.Raw().end());
+    vchKey.insert(vchKey.end(), vchSeed.begin(), vchSeed.end());
+
+    return Write(std::make_pair(std::string("pqkey"), pubkey), std::make_pair(vchSeed, Hash(vchKey.begin(), vchKey.end())), false);
+}
+
+bool CWalletDB::WriteCryptedPQKey(const CPQPubKey& pubkey,
+                                  const std::vector<unsigned char>& vchCryptedSecret,
+                                  const CKeyMetadata &keyMeta)
+{
+    nWalletDBUpdated++;
+
+    if (!Write(std::make_pair(std::string("pqkeymeta"), pubkey), keyMeta))
+        return false;
+    if (!Write(std::make_pair(std::string("cpqkey"), pubkey), vchCryptedSecret, false))
+        return false;
+    Erase(std::make_pair(std::string("pqkey"), pubkey));
+    return true;
+}
+
+bool CWalletDB::WriteCScript256(const uint256& hash, const CScript& redeemScript)
+{
+    nWalletDBUpdated++;
+    return Write(std::make_pair(std::string("cscript256"), hash), redeemScript, false);
+}
+
+bool CWalletDB::WritePQStakingKey(const CPQPubKey& pubkey)
+{
+    nWalletDBUpdated++;
+    return Write(std::string("pqstakekey"), pubkey);
+}
+
+bool CWalletDB::ReadPQAccountKey(const string& strAccount, CPQPubKey& pubkey)
+{
+    pubkey = CPQPubKey();
+    return Read(make_pair(string("pqacc"), strAccount), pubkey);
+}
+
+bool CWalletDB::WritePQAccountKey(const string& strAccount, const CPQPubKey& pubkey)
+{
+    nWalletDBUpdated++;
+    return Write(make_pair(string("pqacc"), strAccount), pubkey);
+}
+
+bool CWalletDB::ReadPQPool(int64_t nPool, CPQKeyPool& keypool)
+{
+    return Read(std::make_pair(std::string("pqpool"), nPool), keypool);
+}
+
+bool CWalletDB::WritePQPool(int64_t nPool, const CPQKeyPool& keypool)
+{
+    nWalletDBUpdated++;
+    return Write(std::make_pair(std::string("pqpool"), nPool), keypool);
+}
+
+bool CWalletDB::ErasePQPool(int64_t nPool)
+{
+    nWalletDBUpdated++;
+    return Erase(std::make_pair(std::string("pqpool"), nPool));
+}
+
 bool CWalletDB::WriteBestBlock(const CBlockLocator& locator)
 {
     nWalletDBUpdated++;
@@ -545,6 +616,86 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
         {
             ssValue >> pwallet->nOrderPosNext;
         }
+        else if (strType == "pqkey")
+        {
+            CPQPubKey pubkey;
+            ssKey >> pubkey;
+            CPrivKey vchSeed;
+            uint256 hash;
+            ssValue >> vchSeed >> hash;
+            wss.nKeys++;
+
+            std::vector<unsigned char, secure_allocator<unsigned char> > vchKey(pubkey.Raw().begin(), pubkey.Raw().end());
+            vchKey.insert(vchKey.end(), vchSeed.begin(), vchSeed.end());
+            if (Hash(vchKey.begin(), vchKey.end()) != hash)
+            {
+                strErr = "Error reading wallet database: CPQPubKey/seed corrupt";
+                return false;
+            }
+            CPQKey key;
+            if (vchSeed.size() != PQ_SEED_SIZE || !key.Set(&vchSeed[0], &vchSeed[0] + vchSeed.size()) ||
+                key.GetPubKey() != pubkey)
+            {
+                strErr = "Error reading wallet database: post-quantum key corrupt";
+                return false;
+            }
+            if (!pwallet->LoadPQKey(key))
+            {
+                strErr = "Error reading wallet database: LoadPQKey failed";
+                return false;
+            }
+        }
+        else if (strType == "cpqkey")
+        {
+            wss.nCKeys++;
+            CPQPubKey pubkey;
+            ssKey >> pubkey;
+            vector<unsigned char> vchCryptedSecret;
+            ssValue >> vchCryptedSecret;
+            if (!pubkey.IsValid() || !pwallet->LoadCryptedPQKey(pubkey, vchCryptedSecret))
+            {
+                strErr = "Error reading wallet database: LoadCryptedPQKey failed";
+                return false;
+            }
+            wss.fIsEncrypted = true;
+        }
+        else if (strType == "pqkeymeta")
+        {
+            CPQPubKey pubkey;
+            ssKey >> pubkey;
+            CKeyMetadata keyMeta;
+            ssValue >> keyMeta;
+            pwallet->LoadPQKeyMetadata(pubkey, keyMeta);
+        }
+        else if (strType == "pqpool")
+        {
+            int64_t nIndex;
+            ssKey >> nIndex;
+            CPQKeyPool keypool;
+            ssValue >> keypool;
+            pwallet->setPQKeyPool.insert(nIndex);
+            CPQKeyID keyid = keypool.pubkey.GetID();
+            if (pwallet->mapPQKeyMetadata.count(keyid) == 0)
+                pwallet->mapPQKeyMetadata[keyid] = CKeyMetadata(keypool.nTime);
+        }
+        else if (strType == "pqstakekey")
+        {
+            CPQPubKey pubkey;
+            ssValue >> pubkey;
+            pwallet->pqStakingKeyID = pubkey.GetID();
+        }
+        else if (strType == "cscript256")
+        {
+            uint256 hash;
+            ssKey >> hash;
+            CScript script;
+            ssValue >> script;
+            if (!pwallet->LoadCScript256(script))
+            {
+                strErr = "Error reading wallet database: LoadCScript256 failed";
+                return false;
+            }
+        }
     } catch (...)
     {
         return false;
@@ -555,7 +706,8 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
 static bool IsKeyType(string strType)
 {
     return (strType== "key" || strType == "wkey" ||
-            strType == "mkey" || strType == "ckey");
+            strType == "mkey" || strType == "ckey" ||
+            strType == "pqkey" || strType == "cpqkey");
 }
 
 DBErrors CWalletDB::LoadWallet(CWallet* pwallet)
