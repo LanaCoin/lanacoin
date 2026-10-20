@@ -25,6 +25,26 @@
 // anonymous namespace with local implementation code (OpenSSL interaction)
 namespace {
 
+// Create an empty secp256k1 key (domain parameters only) that a public or
+// private key can be loaded into
+EVP_PKEY* new_secp256k1_pkey()
+{
+    EVP_PKEY *pkey = NULL;
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, (char*)"secp256k1", 0),
+        OSSL_PARAM_construct_end()
+    };
+
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+    if (ctx == NULL)
+        return NULL;
+    if (EVP_PKEY_fromdata_init(ctx) <= 0 ||
+        EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_KEY_PARAMETERS, params) <= 0)
+        pkey = NULL;
+    EVP_PKEY_CTX_free(ctx);
+    return pkey;
+}
+
 int regenerate_key(EVP_PKEY** pkey, const BIGNUM *priv_key)
 {
     int ok = 0;
@@ -89,6 +109,8 @@ cleanup:
         OSSL_PARAM_free(params);
     if (pub_key_point != NULL)
         EC_POINT_free(pub_key_point);
+    if (group != NULL)
+        EC_GROUP_free(group);
     OSSL_PARAM_BLD_free(param_bld);
     return ok;
 }
@@ -120,7 +142,7 @@ int recover_pubkey_GFp(EVP_PKEY *eckey, ECDSA_SIG *ecsig, const unsigned char *m
     int n = 0;
     int i = recid / 2;
 
-    const EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
+    EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
     if (!group) goto err;
     if ((ctx = BN_CTX_new()) == NULL) { ret = -1; goto err; }
     BN_CTX_start(ctx);
@@ -180,6 +202,7 @@ err:
     if (R != NULL) EC_POINT_free(R);
     if (O != NULL) EC_POINT_free(O);
     if (Q != NULL) EC_POINT_free(Q);
+    if (group != NULL) EC_GROUP_free(group);
 
     return ret;
 }
@@ -192,12 +215,9 @@ private:
 
 public:
     CECKey() {
-        EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
-
-        EVP_PKEY_keygen_init(ctx);
-        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_secp256k1);
-        EVP_PKEY_keygen(ctx, &pkey);
-
+        // Only the curve parameters: generating a throwaway random key here
+        // made every signature verification slow
+        pkey = new_secp256k1_pkey();
         assert(pkey != NULL);
     }
 
@@ -259,11 +279,14 @@ public:
             return false;
 
         if (!fSkipCheck) {
-            EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+            // The check context must be bound to the key being checked
+            EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_pkey(NULL, new_pkey, NULL);
             if (!ctx) {
+                EVP_PKEY_free(new_pkey);
                 return false;
             }
-            int check = EVP_PKEY_private_check(ctx);
+            // Range of the private key and that the public key matches it
+            int check = EVP_PKEY_check(ctx);
             if (check <= 0) {
                 EVP_PKEY_free(new_pkey);
                 EVP_PKEY_CTX_free(ctx);
@@ -423,7 +446,7 @@ public:
         BN_CTX *ctx = BN_CTX_new();
         BN_CTX_start(ctx);
         //const EC_GROUP *group = EC_KEY_get0_group(pkey);
-        const EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
+        EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
 
         BIGNUM *order = BN_CTX_get(ctx);
         BIGNUM *halforder = BN_CTX_get(ctx);
@@ -438,6 +461,7 @@ public:
             BN_sub(s, order, s);
             ECDSA_SIG_set0(sig, r, s);
         }
+        EC_GROUP_free(group);
         BN_CTX_end(ctx);
         BN_CTX_free(ctx);
 
@@ -589,63 +613,45 @@ public:
     bool TweakPublic(const unsigned char vchTweak[32]) {
         bool ret = true;
         size_t pubkey_len = 0;
-        unsigned char pubkey_buf[256];
+        unsigned char pubkey_buf[65];
+        EC_POINT *point = NULL;
         BN_CTX *ctx = BN_CTX_new();
         BN_CTX_start(ctx);
         BIGNUM *bnTweak = BN_CTX_get(ctx);
         BIGNUM *bnOrder = BN_CTX_get(ctx);
         BIGNUM *bnOne = BN_CTX_get(ctx);
-        const EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
-        //const EC_GROUP *group = EC_KEY_get0_group(pkey);
+        EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
         EC_GROUP_get_order(group, bnOrder, ctx); // what a grossly inefficient way to get the (constant) group order...
         BN_bin2bn(vchTweak, 32, bnTweak);
         if (BN_cmp(bnTweak, bnOrder) >= 0)
             ret = false; // extremely unlikely
 
-        //EC_POINT *point = EC_POINT_dup(EC_KEY_get0_public_key(pkey), group);
-
-        OSSL_PARAM params_pubkey[] = {
-            OSSL_PARAM_construct_octet_string(OSSL_PKEY_PARAM_PUB_KEY, pubkey_buf, pubkey_len),
-            OSSL_PARAM_construct_end()
-        };
-
-        if (!EVP_PKEY_get_params((EVP_PKEY *)pkey, params_pubkey)) {
-            return false;
+        if (!EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY, pubkey_buf, sizeof(pubkey_buf), &pubkey_len)) {
+            ret = false;
+            goto err;
         }
 
-        // params_pubkey[0].return_size has actual length of pubkey
-        pubkey_len = params_pubkey[0].return_size;
-
-        EC_POINT *point = EC_POINT_new(group);
-        if (!point) {
-            return false;
-        }
-
-        if (!EC_POINT_oct2point(group, point, pubkey_buf, pubkey_len, NULL)) {
-            EC_POINT_free(point);
-            return false;
+        point = EC_POINT_new(group);
+        if (!point || !EC_POINT_oct2point(group, point, pubkey_buf, pubkey_len, ctx)) {
+            ret = false;
+            goto err;
         }
 
         BN_one(bnOne);
         EC_POINT_mul(group, point, bnTweak, point, bnOne, ctx);
-        if (EC_POINT_is_at_infinity(group, point))
+        if (EC_POINT_is_at_infinity(group, point)) {
             ret = false; // ridiculously unlikely
-
-        //EC_KEY_set_public_key(pkey, point);
+            goto err;
+        }
 
         pubkey_len = EC_POINT_point2oct(group, point, POINT_CONVERSION_UNCOMPRESSED,
-                                       pubkey_buf, sizeof(pubkey_buf), NULL);
-        if (pubkey_len == 0) {
-           ret = -2;
-           goto err;
-        }
-
-        if (EVP_PKEY_set1_encoded_public_key(pkey, pubkey_buf, pubkey_len) != 1) {
-           ret = -2;
-           goto err;
-        }
+                                       pubkey_buf, sizeof(pubkey_buf), ctx);
+        if (pubkey_len == 0 || EVP_PKEY_set1_encoded_public_key(pkey, pubkey_buf, pubkey_len) != 1)
+            ret = false;
 err:
-        EC_POINT_free(point);
+        if (point)
+            EC_POINT_free(point);
+        EC_GROUP_free(group);
         BN_CTX_end(ctx);
         BN_CTX_free(ctx);
         return ret;
