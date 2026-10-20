@@ -72,6 +72,14 @@ public:
     {
         return (exp_addrType == "script");
     }
+    bool operator()(const CPQKeyID &id) const
+    {
+        return (exp_addrType == "pqpubkey");
+    }
+    bool operator()(const CScriptID256 &id) const
+    {
+        return (exp_addrType == "script256");
+    }
     bool operator()(const CNoDestination &no) const
     {
         return (exp_addrType == "none");
@@ -93,6 +101,16 @@ public:
     bool operator()(const CScriptID &id) const
     {
         uint160 exp_key(exp_payload);
+        return exp_key == id;
+    }
+    bool operator()(const CPQKeyID &id) const
+    {
+        uint256 exp_key(exp_payload);
+        return exp_key == id;
+    }
+    bool operator()(const CScriptID256 &id) const
+    {
+        uint256 exp_key(exp_payload);
         return exp_key == id;
     }
     bool operator()(const CNoDestination &no) const

@@ -96,6 +96,16 @@ public:
         convertSeed6(vFixedSeeds, pnSeed6_main, ARRAYLEN(pnSeed6_main));
 
         nLastPOWBlock = 750000;
+
+        // Post-quantum hard fork: 7 May 2027 06:39 GMT+2, Lana's birthday.
+        // From then on new outputs must be post-quantum (ML-DSA-44); ECDSA
+        // signatures stop being valid one year later, 7 May 2028 06:39 GMT+2.
+        nPQForkTime = 1809664740;       // 2027-05-07 04:39:00 UTC
+        nECDSASunsetTime = 1841287140;  // 2028-05-07 04:39:00 UTC
+
+        base58Prefixes[PQ_PUBKEY_ADDRESS] = boost::assign::list_of(131)(46).convert_to_container<std::vector<unsigned char> >();  // "LQ..."
+        base58Prefixes[PQ_SCRIPT_ADDRESS] = boost::assign::list_of(131)(105).convert_to_container<std::vector<unsigned char> >(); // "LS..."
+        base58Prefixes[PQ_SECRET_KEY] =     boost::assign::list_of(130)(152).convert_to_container<std::vector<unsigned char> >(); // "LK..."
     }
 
     virtual const CBlock& GenesisBlock() const { return genesis; }
@@ -151,6 +161,14 @@ public:
         convertSeed6(vFixedSeeds, pnSeed6_test, ARRAYLEN(pnSeed6_test));
 
         nLastPOWBlock = 0x7fffffff;
+
+        // Testnet goes through the whole post-quantum transition before mainnet
+        nPQForkTime = 1801978740;       // 2027-02-07 05:39:00 UTC
+        nECDSASunsetTime = 1807072740;  // 2027-04-07 04:39:00 UTC
+
+        base58Prefixes[PQ_PUBKEY_ADDRESS] = boost::assign::list_of(178)(128).convert_to_container<std::vector<unsigned char> >(); // "TQ..."
+        base58Prefixes[PQ_SCRIPT_ADDRESS] = boost::assign::list_of(178)(187).convert_to_container<std::vector<unsigned char> >(); // "TS..."
+        base58Prefixes[PQ_SECRET_KEY] =     boost::assign::list_of(177)(234).convert_to_container<std::vector<unsigned char> >(); // "TK..."
     }
     virtual Network NetworkID() const { return CChainParams::TESTNET; }
 };
@@ -193,6 +211,10 @@ const CChainParams &Params() {
     return *pCurrentParams;
 }
 
+CChainParams &ModifiableParams() {
+    return *pCurrentParams;
+}
+
 void SelectParams(CChainParams::Network network) {
     switch (network) {
         case CChainParams::MAIN:
@@ -224,6 +246,17 @@ bool SelectParamsFromCommandLine() {
         SelectParams(CChainParams::TESTNET);
     } else {
         SelectParams(CChainParams::MAIN);
+    }
+
+    // The post-quantum fork times can only be changed for test networks
+    if (fRegTest || fTestNet) {
+        int64_t nForkTime = GetArg("-pqforktime", Params().PQForkTime());
+        int64_t nSunsetTime = GetArg("-ecdsasunsettime", std::max(nForkTime, Params().ECDSASunsetTime()));
+        if (nSunsetTime < nForkTime)
+            return false;
+        ModifiableParams().SetPQForkTimes(nForkTime, nSunsetTime);
+    } else if (mapArgs.count("-pqforktime") || mapArgs.count("-ecdsasunsettime")) {
+        return false;
     }
     return true;
 }

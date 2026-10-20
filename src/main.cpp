@@ -274,6 +274,9 @@ bool CTransaction::ReadFromDisk(COutPoint prevout)
 
 bool IsStandardTx(const CTransaction& tx, string& reason)
 {
+    // Post-quantum fork rules apply to the next block, which is about now
+    const bool fPQFork = IsPQForkActive(GetAdjustedTime());
+
     if (tx.nVersion > CTransaction::CURRENT_VERSION || tx.nVersion < 1) {
         reason = "version";
         return false;
@@ -325,7 +328,10 @@ bool IsStandardTx(const CTransaction& tx, string& reason)
         // future-proofing. That's also enough to spend a 20-of-20
         // CHECKMULTISIG scriptPubKey, though such a scriptPubKey is not
         // considered standard)
-        if (txin.scriptSig.size() > 1650) {
+        // After the post-quantum fork room for post-quantum signatures and
+        // public keys, also in P2SH256 redeem scripts with several keys
+        unsigned int nMaxScriptSigSize = fPQFork ? MAX_SCRIPT_ELEMENT_SIZE_PQ + 4096 : 1650;
+        if (txin.scriptSig.size() > nMaxScriptSigSize) {
             reason = "scriptsig-size";
             return false;
         }
@@ -344,6 +350,12 @@ bool IsStandardTx(const CTransaction& tx, string& reason)
     BOOST_FOREACH(const CTxOut& txout, tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
             reason = "scriptpubkey";
+            return false;
+        }
+        // Post-quantum outputs can only be spent after the fork, don't let
+        // anyone lock their coins before it
+        if (!fPQFork && (whichType == TX_PQKEYHASH || whichType == TX_SCRIPTHASH256)) {
+            reason = "pq-output-before-fork";
             return false;
         }
         if (whichType == TX_NULL_DATA)
@@ -420,9 +432,36 @@ bool AreInputsStandard(const CTransaction& tx, const MapPrevTx& mapInputs)
         // beside "push data" in the scriptSig
         // IsStandard() will have already returned false
         // and this method isn't called.
+        // (SCRIPT_VERIFY_PQ: post-quantum signatures are larger pushes)
         vector<vector<unsigned char> > stack;
-        if (!EvalScript(stack, tx.vin[i].scriptSig, tx, i, SCRIPT_VERIFY_NONE, 0))
+        if (!EvalScript(stack, tx.vin[i].scriptSig, tx, i, SCRIPT_VERIFY_PQ, 0))
             return false;
+
+        if (whichType == TX_SCRIPTHASH256)
+        {
+            if (stack.empty())
+                return false;
+            CScript subscript(stack.back().begin(), stack.back().end());
+            vector<vector<unsigned char> > vSolutions2;
+            txnouttype whichType2;
+            if (Solver(subscript, whichType2, vSolutions2))
+            {
+                int tmpExpected = ScriptSigArgsExpected(whichType2, vSolutions2);
+                if (tmpExpected < 0 || whichType2 == TX_SCRIPTHASH || whichType2 == TX_SCRIPTHASH256)
+                    return false;
+                nArgsExpected += tmpExpected;
+            }
+            else
+            {
+                // Any other script (e.g. post-quantum multisig) with a
+                // limited number of signature checks is OK, extra data
+                // left on the stack after execution too
+                if (subscript.GetPQSigOpCount() > MAX_P2SH_SIGOPS ||
+                    subscript.GetSigOpCount(true) > MAX_P2SH_SIGOPS)
+                    return false;
+                continue;
+            }
+        }
 
         if (whichType == TX_SCRIPTHASH)
         {
@@ -442,8 +481,11 @@ bool AreInputsStandard(const CTransaction& tx, const MapPrevTx& mapInputs)
             {
                 // Any other Script with less than 15 sigops OK:
                 unsigned int sigops = subscript.GetSigOpCount(true);
-                // ... extra data left on the stack after execution is OK, too:
-                return (sigops <= MAX_P2SH_SIGOPS);
+                // ... extra data left on the stack after execution is OK, too
+                // (the remaining inputs are still checked)
+                if (sigops > MAX_P2SH_SIGOPS)
+                    return false;
+                continue;
             }
         }
 
@@ -481,6 +523,77 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const MapPrevTx& inputs)
             nSigOps += prevout.scriptPubKey.GetSigOpCount(tx.vin[i].scriptSig);
     }
     return nSigOps;
+}
+
+unsigned int GetPQSigOpCount(const CTransaction& tx, const MapPrevTx& inputs)
+{
+    unsigned int nSigOps = 0;
+    BOOST_FOREACH(const CTxIn& txin, tx.vin)
+        nSigOps += txin.scriptSig.GetPQSigOpCount();
+    BOOST_FOREACH(const CTxOut& txout, tx.vout)
+        nSigOps += txout.scriptPubKey.GetPQSigOpCount();
+    if (tx.IsCoinBase())
+        return nSigOps;
+    for (unsigned int i = 0; i < tx.vin.size(); i++)
+    {
+        const CTxOut& prevout = tx.GetOutputFor(tx.vin[i], inputs);
+        if (prevout.scriptPubKey.IsPayToScriptHash256())
+            nSigOps += prevout.scriptPubKey.GetPQSigOpCount(tx.vin[i].scriptSig);
+    }
+    return nSigOps;
+}
+
+//
+// Post-quantum hard fork
+//
+
+bool IsPQForkActive(int64_t nTime)
+{
+    return nTime >= Params().PQForkTime();
+}
+
+bool IsECDSASunset(int64_t nTime)
+{
+    return nTime >= Params().ECDSASunsetTime();
+}
+
+unsigned int GetPQScriptFlags(int64_t nTime)
+{
+    unsigned int flags = 0;
+    if (IsPQForkActive(nTime))
+        flags |= SCRIPT_VERIFY_PQ;
+    if (IsECDSASunset(nTime))
+        flags |= SCRIPT_VERIFY_NO_ECDSA;
+    return flags;
+}
+
+bool CheckPQOutputs(const CTransaction& tx, string& reason)
+{
+    BOOST_FOREACH(const CTxOut& txout, tx.vout)
+    {
+        const CScript& script = txout.scriptPubKey;
+
+        // Coinbase/coinstake marker (an empty script with a value could be
+        // spent by anyone)
+        if (script.empty() && txout.nValue == 0)
+            continue;
+
+        // Provably unspendable: burned or data outputs
+        if (!script.empty() && script[0] == OP_RETURN)
+            continue;
+
+        if (script.IsPayToScriptHash256())
+            continue;
+
+        txnouttype whichType;
+        vector<valtype> vSolutions;
+        if (Solver(script, whichType, vSolutions) && whichType == TX_PQKEYHASH)
+            continue;
+
+        reason = "output-not-quantum-safe";
+        return false;
+    }
+    return true;
 }
 
 int CMerkleTx::SetMerkleBranch(const CBlock* pblock)
@@ -631,6 +744,13 @@ bool AcceptToMemoryPool(CTxMemPool& pool, CTransaction &tx, bool fLimitFree,
         return error("AcceptToMemoryPool : nonstandard transaction: %s",
                      reason);
 
+    // Post-quantum fork: rules for the next block, which is about now
+    int64_t nTimeNextBlock = GetAdjustedTime();
+    const bool fPQFork = IsPQForkActive(nTimeNextBlock);
+    const unsigned int nPQFlags = GetPQScriptFlags(nTimeNextBlock);
+    if (fPQFork && !CheckPQOutputs(tx, reason))
+        return tx.DoS(0, error("AcceptToMemoryPool : %s", reason));
+
     // is it already in the memory pool?
     uint256 hash = tx.GetHash();
     if (pool.exists(hash))
@@ -684,6 +804,14 @@ bool AcceptToMemoryPool(CTxMemPool& pool, CTransaction &tx, bool fLimitFree,
             return tx.DoS(0,
                           error("AcceptToMemoryPool : too many sigops %s, %d > %d",
                                 hash.ToString(), nSigOps, MAX_TX_SIGOPS));
+        if (fPQFork)
+        {
+            unsigned int nPQSigOps = GetPQSigOpCount(tx, mapInputs);
+            if (nPQSigOps > MAX_TX_PQ_SIGOPS)
+                return tx.DoS(0,
+                              error("AcceptToMemoryPool : too many post-quantum sigops %s, %d > %d",
+                                    hash.ToString(), nPQSigOps, MAX_TX_PQ_SIGOPS));
+        }
 
         int64_t nFees = tx.GetValueIn(mapInputs)-tx.GetValueOut();
         unsigned int nSize = ::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION);
@@ -720,7 +848,7 @@ bool AcceptToMemoryPool(CTxMemPool& pool, CTransaction &tx, bool fLimitFree,
 
         // Check against previous transactions
         // This is done last to help prevent CPU exhaustion denial-of-service attacks.
-        if (!tx.ConnectInputs(txdb, mapInputs, mapUnused, CDiskTxPos(1,1,1), pindexBest, false, false, STANDARD_SCRIPT_VERIFY_FLAGS))
+        if (!tx.ConnectInputs(txdb, mapInputs, mapUnused, CDiskTxPos(1,1,1), pindexBest, false, false, STANDARD_SCRIPT_VERIFY_FLAGS | nPQFlags))
         {
             return error("AcceptToMemoryPool : ConnectInputs failed %s", hash.ToString());
         }
@@ -734,7 +862,7 @@ bool AcceptToMemoryPool(CTxMemPool& pool, CTransaction &tx, bool fLimitFree,
         // There is a similar check in CreateNewBlock() to prevent creating
         // invalid blocks, however allowing such transactions into the mempool
         // can be exploited as a DoS attack.
-        if (!tx.ConnectInputs(txdb, mapInputs, mapUnused, CDiskTxPos(1,1,1), pindexBest, false, false, MANDATORY_SCRIPT_VERIFY_FLAGS))
+        if (!tx.ConnectInputs(txdb, mapInputs, mapUnused, CDiskTxPos(1,1,1), pindexBest, false, false, MANDATORY_SCRIPT_VERIFY_FLAGS | nPQFlags))
         {
             return error("AcceptToMemoryPool: : BUG! PLEASE REPORT THIS! ConnectInputs failed against MANDATORY but not STANDARD flags %s", hash.ToString());
         }
@@ -1438,7 +1566,10 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
              SCRIPT_VERIFY_ALLOW_EMPTY_SIG |
              SCRIPT_VERIFY_FIX_HASHTYPE |
              SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY |
-             SCRIPT_VERIFY_NOCACHE;
+             SCRIPT_VERIFY_NOCACHE |
+             GetPQScriptFlags(GetBlockTime());
+    const bool fPQFork = IsPQForkActive(GetBlockTime());
+    unsigned int nPQSigOps = 0;
 
     //// issue here: it doesn't know the version
     unsigned int nTxPos;
@@ -1488,7 +1619,15 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
 
         MapPrevTx mapInputs;
         if (tx.IsCoinBase())
+        {
             nValueOut += tx.GetValueOut();
+            if (fPQFork)
+            {
+                nPQSigOps += GetPQSigOpCount(tx, mapInputs);
+                if (nPQSigOps > MAX_BLOCK_PQ_SIGOPS)
+                    return DoS(100, error("ConnectBlock() : too many post-quantum sigops"));
+            }
+        }
         else
         {
             bool fInvalid;
@@ -1501,6 +1640,14 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             nSigOps += GetP2SHSigOpCount(tx, mapInputs);
             if (nSigOps > MAX_BLOCK_SIGOPS)
                 return DoS(100, error("ConnectBlock() : too many sigops"));
+
+            // Same for post-quantum signature checks, after the fork
+            if (fPQFork)
+            {
+                nPQSigOps += GetPQSigOpCount(tx, mapInputs);
+                if (nPQSigOps > MAX_BLOCK_PQ_SIGOPS)
+                    return DoS(100, error("ConnectBlock() : too many post-quantum sigops"));
+            }
 
             int64_t nTxValueIn = tx.GetValueIn(mapInputs);
             int64_t nTxValueOut = tx.GetValueOut();
@@ -1986,6 +2133,11 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
         // ppcoin: check transaction timestamp
         if (GetBlockTime() < (int64_t)tx.nTime)
             return DoS(50, error("CheckBlock() : block timestamp earlier than transaction timestamp"));
+
+        // Post-quantum fork: new outputs must be quantum safe
+        string strReason;
+        if (IsPQForkActive(GetBlockTime()) && !CheckPQOutputs(tx, strReason))
+            return DoS(100, error("CheckBlock() : %s in transaction %s", strReason, tx.GetHash().ToString()));
     }
 
     // Check for duplicate txids. This is caught by ConnectInputs(),
@@ -2145,6 +2297,11 @@ bool static IsCanonicalBlockSignature(CBlock* pblock, bool checkLowS)
 {
     if (pblock->IsProofOfWork()) {
         return pblock->vchBlockSig.empty();
+    }
+
+    // Post-quantum block signatures have a fixed size and no DER encoding
+    if (IsPQForkActive(pblock->GetBlockTime())) {
+        return pblock->vchBlockSig.size() == PQ_BLOCK_SIGNATURE_SIZE;
     }
 
     return checkLowS ? IsLowDERSignature(pblock->vchBlockSig, false) : IsDERSignature(pblock->vchBlockSig, false);
@@ -2343,6 +2500,43 @@ bool CBlock::CheckBlockSignature() const
     txnouttype whichType;
 
     const CTxOut& txout = vtx[1].vout[1];
+
+    // Post-quantum fork: the block is signed with an ML-DSA key; the
+    // signature carries the public key, whose hash must match the coinstake
+    if (IsPQForkActive(GetBlockTime()))
+    {
+        if (vchBlockSig.size() != PQ_BLOCK_SIGNATURE_SIZE)
+            return false;
+        CPQPubKey pubkey(vchBlockSig.begin(), vchBlockSig.begin() + PQ_PUBKEY_SIZE);
+        vector<unsigned char> vchSig(vchBlockSig.begin() + PQ_PUBKEY_SIZE, vchBlockSig.end());
+        if (!pubkey.IsValid())
+            return false;
+
+        CPQKeyID keyID;
+        if (Solver(txout.scriptPubKey, whichType, vSolutions) && whichType == TX_PQKEYHASH)
+        {
+            keyID = CPQKeyID(uint256(vSolutions[0]));
+        }
+        else
+        {
+            // Block signing key hash in a nonspendable output (e.g. for
+            // multisig staking): OP_RETURN <32 byte post-quantum key hash>
+            const CScript& script = txout.scriptPubKey;
+            CScript::const_iterator pc = script.begin();
+            opcodetype opcode;
+            valtype vchPushValue;
+            if (!script.GetOp(pc, opcode, vchPushValue) || opcode != OP_RETURN)
+                return false;
+            if (!script.GetOp(pc, opcode, vchPushValue) || vchPushValue.size() != sizeof(uint256))
+                return false;
+            if (pc != script.end())
+                return false;
+            keyID = CPQKeyID(uint256(vchPushValue));
+        }
+        if (pubkey.GetID() != keyID)
+            return false;
+        return pubkey.Verify(GetHash(), vchSig, PQ_DOMAIN_BLOCK);
+    }
 
     if (!Solver(txout.scriptPubKey, whichType, vSolutions))
         return false;

@@ -15,6 +15,7 @@
 #include <boost/variant.hpp>
 
 #include "keystore.h"
+#include "pqkey.h"
 #include "bignum.h"
 #include "util.h"
 
@@ -23,6 +24,13 @@ typedef std::vector<unsigned char> valtype;
 class CTransaction;
 
 static const unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520; // bytes
+static const unsigned int MAX_SCRIPT_SIZE = 10000; // bytes
+
+// Limits after the post-quantum hard fork (SCRIPT_VERIFY_PQ): room for
+// post-quantum keys and signatures, also of larger future parameter sets,
+// and for redeem scripts with several post-quantum keys
+static const unsigned int MAX_SCRIPT_ELEMENT_SIZE_PQ = 16384; // bytes
+static const unsigned int MAX_SCRIPT_SIZE_PQ = 65536; // bytes
 static const unsigned int MAX_OP_RETURN_RELAY = 40;      // bytes
 
 /** Signature hash types/flags */
@@ -60,6 +68,13 @@ enum
     // Verify CHECKLOCKTIMEVERIFY (BIP65)
     //
     SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY = (1U << 6),
+
+    // Post-quantum hard fork: enable OP_CHECKSIGPQ(VERIFY), pay-to-script-hash
+    // with 256 bit hashes and the larger element and script size limits
+    SCRIPT_VERIFY_PQ = (1U << 7),
+
+    // ECDSA sunset: OP_CHECKSIG(VERIFY) and OP_CHECKMULTISIG(VERIFY) fail
+    SCRIPT_VERIFY_NO_ECDSA = (1U << 8),
 };
 
 // Mandatory script verification flags that all new blocks must comply with for
@@ -89,6 +104,8 @@ enum txnouttype
     TX_SCRIPTHASH,
     TX_MULTISIG,
     TX_NULL_DATA,
+    TX_PQKEYHASH,     // post-quantum key hash (after the post-quantum fork)
+    TX_SCRIPTHASH256, // pay-to-script-hash with a 256 bit hash (after the post-quantum fork)
 };
 
 class CNoDestination {
@@ -101,9 +118,11 @@ public:
  *  * CNoDestination: no destination set
  *  * CKeyID: TX_PUBKEYHASH destination
  *  * CScriptID: TX_SCRIPTHASH destination
+ *  * CPQKeyID: TX_PQKEYHASH destination
+ *  * CScriptID256: TX_SCRIPTHASH256 destination
  *  A CTxDestination is the internal data type encoded in a CBitcoinAddress
  */
-typedef boost::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
+typedef boost::variant<CNoDestination, CKeyID, CScriptID, CPQKeyID, CScriptID256> CTxDestination;
 
 const char* GetTxnOutputType(txnouttype t);
 
@@ -243,12 +262,17 @@ enum opcodetype
     OP_NOP9 = 0xb8,
     OP_NOP10 = 0xb9,
 
+    // post-quantum signatures (valid after the post-quantum hard fork only)
+    OP_CHECKSIGPQ = 0xc0,
+    OP_CHECKSIGPQVERIFY = 0xc1,
+
 
 
     // template matching params
     OP_SMALLDATA = 0xf9,
     OP_SMALLINTEGER = 0xfa,
     OP_PUBKEYS = 0xfb,
+    OP_PQKEYHASH = 0xfc,
     OP_PUBKEYHASH = 0xfd,
     OP_PUBKEY = 0xfe,
 
@@ -399,6 +423,12 @@ public:
         assert(key.size() < OP_PUSHDATA1);
         insert(end(), (unsigned char)key.size());
         insert(end(), key.begin(), key.end());
+        return *this;
+    }
+
+    CScript& operator<<(const CPQPubKey& key)
+    {
+        *this << key.Raw();
         return *this;
     }
 
@@ -581,6 +611,15 @@ public:
 
     bool IsPayToScriptHash() const;
 
+    // OP_HASH256 <32 byte script hash> OP_EQUAL (after the post-quantum fork)
+    bool IsPayToScriptHash256() const;
+
+    // Post-quantum signature operations, limited separately after the
+    // post-quantum fork (see MAX_BLOCK_PQ_SIGOPS)
+    unsigned int GetPQSigOpCount() const;
+    // Including the redeem script of a P2SH256 output spent by scriptSig
+    unsigned int GetPQSigOpCount(const CScript& scriptSig) const;
+
     // Called by IsStandardTx and P2SH VerifyScript (which makes it consensus-critical).
     bool IsPushOnly() const
     {
@@ -628,6 +667,12 @@ public:
     CScriptID GetID() const
     {
         return CScriptID(Hash160(*this));
+    }
+
+    // 256 bit script hash, for pay-to-script-hash after the post-quantum fork
+    CScriptID256 GetID256() const
+    {
+        return CScriptID256(Hash(begin(), end()));
     }
 
     void clear()

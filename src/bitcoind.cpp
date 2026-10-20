@@ -71,7 +71,7 @@ bool AppInit(int argc, char* argv[])
         if (fCommandLine)
         {
             if (!SelectParamsFromCommandLine()) {
-                fprintf(stderr, "Error: invalid combination of -regtest and -testnet.\n");
+                fprintf(stderr, "Error: invalid combination of -regtest and -testnet, or invalid -pqforktime/-ecdsasunsettime.\n");
                 return false;
             }
             int ret = CommandLineRPC(argc, argv);

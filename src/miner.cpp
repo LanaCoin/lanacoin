@@ -248,7 +248,14 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
         uint64_t nBlockSize = 1000;
         uint64_t nBlockTx = 0;
         int nBlockSigOps = 100;
+        unsigned int nBlockPQSigOps = 0;
         bool fSortedByFee = (nBlockPrioritySize <= 0);
+
+        // Post-quantum fork rules for the block time (about now; SignBlock
+        // gives up if the rules change before the block is signed)
+        const int64_t nTimeBlock = pblock->vtx[0].nTime;
+        const bool fPQFork = IsPQForkActive(nTimeBlock);
+        const unsigned int nPQFlags = GetPQScriptFlags(nTimeBlock);
 
         TxPriorityCompare comparer(fSortedByFee);
         std::make_heap(vecPriority.begin(), vecPriority.end(), comparer);
@@ -275,6 +282,11 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
 
             // Timestamp limit
             if (tx.nTime > GetAdjustedTime() || (fProofOfStake && tx.nTime > pblock->vtx[0].nTime))
+                continue;
+
+            // After the post-quantum fork only quantum safe outputs
+            string strReason;
+            if (fPQFork && !CheckPQOutputs(tx, strReason))
                 continue;
 
             // Transaction fee
@@ -310,10 +322,14 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
             if (nBlockSigOps + nTxSigOps >= MAX_BLOCK_SIGOPS)
                 continue;
 
+            unsigned int nTxPQSigOps = fPQFork ? GetPQSigOpCount(tx, mapInputs) : 0;
+            if (nBlockPQSigOps + nTxPQSigOps > MAX_BLOCK_PQ_SIGOPS - 10) // room for coinbase/coinstake
+                continue;
+
             // Note that flags: we don't want to set mempool/IsStandard()
             // policy here, but we still have to ensure that the block we
             // create only contains transactions that are valid in new blocks.
-            if (!tx.ConnectInputs(txdb, mapInputs, mapTestPoolTmp, CDiskTxPos(1,1,1), pindexPrev, false, true, MANDATORY_SCRIPT_VERIFY_FLAGS))
+            if (!tx.ConnectInputs(txdb, mapInputs, mapTestPoolTmp, CDiskTxPos(1,1,1), pindexPrev, false, true, MANDATORY_SCRIPT_VERIFY_FLAGS | nPQFlags))
                 continue;
             mapTestPoolTmp[tx.GetHash()] = CTxIndex(CDiskTxPos(1,1,1), tx.vout.size());
             swap(mapTestPool, mapTestPoolTmp);
@@ -323,6 +339,7 @@ CBlock* CreateNewBlock(CReserveKey& reservekey, bool fProofOfStake, int64_t* pFe
             nBlockSize += nTxSize;
             ++nBlockTx;
             nBlockSigOps += nTxSigOps;
+            nBlockPQSigOps += nTxPQSigOps;
             nFees += nTxFees;
 
             if (fDebug && GetBoolArg("-printpriority", false))

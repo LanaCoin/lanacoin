@@ -35,6 +35,12 @@ static const unsigned int MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50;
 static const unsigned int MAX_P2SH_SIGOPS = 15;
 /** The maximum number of sigops we're willing to relay/mine in a single tx */
 static const unsigned int MAX_TX_SIGOPS = MAX_BLOCK_SIGOPS/5;
+/** The maximum number of post-quantum signature operations in a block (network rule after the post-quantum fork) */
+static const unsigned int MAX_BLOCK_PQ_SIGOPS = MAX_BLOCK_SIZE/2500;
+/** The maximum number of post-quantum signature operations we're willing to relay/mine in a single tx */
+static const unsigned int MAX_TX_PQ_SIGOPS = MAX_BLOCK_PQ_SIGOPS/5;
+/** Size of a post-quantum proof-of-stake block signature: public key followed by the signature */
+static const unsigned int PQ_BLOCK_SIGNATURE_SIZE = PQ_PUBKEY_SIZE + PQ_SIGNATURE_SIZE;
 /** The maximum number of orphan transactions kept in memory */
 static const unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
 /** Default for -maxorphanblocksmib, maximum number of memory to keep orphan blocks */
@@ -426,6 +432,20 @@ unsigned int GetLegacySigOpCount(const CTransaction& tx);
     @see CTransaction::FetchInputs
  */
 unsigned int GetP2SHSigOpCount(const CTransaction& tx, const MapPrevTx& mapInputs);
+
+/** Count post-quantum signature operations: in scriptSigs and scriptPubKeys,
+    and in the redeem scripts of spent P2SH256 outputs */
+unsigned int GetPQSigOpCount(const CTransaction& tx, const MapPrevTx& mapInputs);
+
+/** Post-quantum hard fork (doc/pq-hardfork.md), by block time */
+bool IsPQForkActive(int64_t nTime);
+/** ECDSA signatures are invalid from this block time on */
+bool IsECDSASunset(int64_t nTime);
+/** Script verification flags the fork adds for a block with this time */
+unsigned int GetPQScriptFlags(int64_t nTime);
+/** After the fork every new output must be quantum safe: a post-quantum key
+    hash, a 256 bit script hash, provably unspendable (OP_RETURN) or empty */
+bool CheckPQOutputs(const CTransaction& tx, std::string& reason);
 
 /** Check for standard transaction types
     @return True if all outputs (scriptPubKeys) use only standard transaction forms

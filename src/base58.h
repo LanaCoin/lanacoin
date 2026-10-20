@@ -266,6 +266,8 @@ public:
     CBitcoinAddressVisitor(CBitcoinAddress *addrIn) : addr(addrIn) { }
     bool operator()(const CKeyID &id) const;
     bool operator()(const CScriptID &id) const;
+    bool operator()(const CPQKeyID &id) const;
+    bool operator()(const CScriptID256 &id) const;
     bool operator()(const CNoDestination &no) const;
 };
 
@@ -282,17 +284,53 @@ public:
         return true;
     }
 
+    // Post-quantum addresses: 2 version bytes and a 32 byte hash
+    bool Set(const CPQKeyID &id) {
+        SetData(Params().Base58Prefix(CChainParams::PQ_PUBKEY_ADDRESS), &id, 32);
+        return true;
+    }
+
+    bool Set(const CScriptID256 &id) {
+        SetData(Params().Base58Prefix(CChainParams::PQ_SCRIPT_ADDRESS), &id, 32);
+        return true;
+    }
+
     bool Set(const CTxDestination &dest)
     {
         return boost::apply_visitor(CBitcoinAddressVisitor(this), dest);
     }
 
+    // Legacy addresses have one version byte, post-quantum ones two; the
+    // decoded lengths (21 and 34 bytes) can not be confused. Must not depend
+    // on Params(), addresses can be parsed during static initialization.
+    bool SetString(const char* psz)
+    {
+        std::vector<unsigned char> vchTemp;
+        DecodeBase58Check(psz, vchTemp);
+        unsigned int nVersionBytes = (vchTemp.size() == 2 + 32) ? 2 : 1;
+        return CBase58Data::SetString(psz, nVersionBytes);
+    }
+
+    bool SetString(const std::string& str)
+    {
+        return SetString(str.c_str());
+    }
+
     bool IsValid() const
     {
-        bool fCorrectSize = vchData.size() == 20;
-        bool fKnownVersion = vchVersion == Params().Base58Prefix(CChainParams::PUBKEY_ADDRESS) ||
-                             vchVersion == Params().Base58Prefix(CChainParams::SCRIPT_ADDRESS);
-        return fCorrectSize && fKnownVersion;
+        if (vchData.size() == 20)
+            return vchVersion == Params().Base58Prefix(CChainParams::PUBKEY_ADDRESS) ||
+                   vchVersion == Params().Base58Prefix(CChainParams::SCRIPT_ADDRESS);
+        if (vchData.size() == 32)
+            return vchVersion == Params().Base58Prefix(CChainParams::PQ_PUBKEY_ADDRESS) ||
+                   vchVersion == Params().Base58Prefix(CChainParams::PQ_SCRIPT_ADDRESS);
+        return false;
+    }
+
+    // Post-quantum (quantum safe) destination
+    bool IsPostQuantum() const
+    {
+        return IsValid() && vchData.size() == 32;
     }
 
     CBitcoinAddress()
@@ -317,6 +355,13 @@ public:
     CTxDestination Get() const {
         if (!IsValid())
             return CNoDestination();
+        if (vchData.size() == 32) {
+            uint256 id;
+            memcpy(&id, &vchData[0], 32);
+            if (vchVersion == Params().Base58Prefix(CChainParams::PQ_PUBKEY_ADDRESS))
+                return CPQKeyID(id);
+            return CScriptID256(id);
+        }
         uint160 id;
         memcpy(&id, &vchData[0], 20);
         if (vchVersion == Params().Base58Prefix(CChainParams::PUBKEY_ADDRESS))
@@ -325,6 +370,15 @@ public:
             return CScriptID(id);
         else
             return CNoDestination();
+    }
+
+    bool GetPQKeyID(CPQKeyID &keyID) const {
+        if (!IsValid() || vchVersion != Params().Base58Prefix(CChainParams::PQ_PUBKEY_ADDRESS))
+            return false;
+        uint256 id;
+        memcpy(&id, &vchData[0], 32);
+        keyID = CPQKeyID(id);
+        return true;
     }
 
     bool GetKeyID(CKeyID &keyID) const {
@@ -337,13 +391,59 @@ public:
     }
 
     bool IsScript() const {
-        return IsValid() && vchVersion == Params().Base58Prefix(CChainParams::SCRIPT_ADDRESS);
+        return IsValid() && (vchVersion == Params().Base58Prefix(CChainParams::SCRIPT_ADDRESS) ||
+                             vchVersion == Params().Base58Prefix(CChainParams::PQ_SCRIPT_ADDRESS));
     }
 };
 
 bool inline CBitcoinAddressVisitor::operator()(const CKeyID &id) const         { return addr->Set(id); }
 bool inline CBitcoinAddressVisitor::operator()(const CScriptID &id) const      { return addr->Set(id); }
+bool inline CBitcoinAddressVisitor::operator()(const CPQKeyID &id) const       { return addr->Set(id); }
+bool inline CBitcoinAddressVisitor::operator()(const CScriptID256 &id) const   { return addr->Set(id); }
 bool inline CBitcoinAddressVisitor::operator()(const CNoDestination &id) const { return false; }
+
+/** A base58-encoded post-quantum secret key (the 32 byte seed) */
+class CPQSecret : public CBase58Data
+{
+public:
+    void SetKey(const CPQKey& key)
+    {
+        assert(key.IsValid());
+        SetData(Params().Base58Prefix(CChainParams::PQ_SECRET_KEY), key.begin(), key.size());
+    }
+
+    bool GetKey(CPQKey &keyOut) const
+    {
+        if (!IsValid())
+            return false;
+        return keyOut.Set(&vchData[0], &vchData[0] + vchData.size());
+    }
+
+    bool IsValid() const
+    {
+        return vchData.size() == PQ_SEED_SIZE &&
+               vchVersion == Params().Base58Prefix(CChainParams::PQ_SECRET_KEY);
+    }
+
+    bool SetString(const char* pszSecret)
+    {
+        return CBase58Data::SetString(pszSecret, 2) && IsValid();
+    }
+
+    bool SetString(const std::string& strSecret)
+    {
+        return SetString(strSecret.c_str());
+    }
+
+    CPQSecret(const CPQKey& key)
+    {
+        SetKey(key);
+    }
+
+    CPQSecret()
+    {
+    }
+};
 
 /** A base58-encoded secret key */
 class CBitcoinSecret : public CBase58Data

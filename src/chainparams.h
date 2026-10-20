@@ -49,6 +49,9 @@ public:
         SECRET_KEY,
         EXT_PUBLIC_KEY,
         EXT_SECRET_KEY,
+        PQ_PUBKEY_ADDRESS,  // post-quantum key hash (CPQKeyID)
+        PQ_SCRIPT_ADDRESS,  // 256 bit script hash (CScriptID256)
+        PQ_SECRET_KEY,      // post-quantum key seed
 
         MAX_BASE58_TYPES
     };
@@ -68,6 +71,14 @@ public:
     virtual const vector<CAddress>& FixedSeeds() const = 0;
     int RPCPort() const { return nRPCPort; }
     int LastPOWBlock() const { return nLastPOWBlock; }
+    // Post-quantum hard fork (doc/pq-hardfork.md), block times
+    int64_t PQForkTime() const { return nPQForkTime; }
+    int64_t ECDSASunsetTime() const { return nECDSASunsetTime; }
+    // Change the fork times (regtest/testnet command line and unit tests only)
+    void SetPQForkTimes(int64_t nForkTime, int64_t nSunsetTime) {
+        nPQForkTime = nForkTime;
+        nECDSASunsetTime = nSunsetTime;
+    }
 protected:
     CChainParams() {};
 
@@ -83,6 +94,8 @@ protected:
     vector<CDNSSeedData> vSeeds;
     std::vector<unsigned char> base58Prefixes[MAX_BASE58_TYPES];
     int nLastPOWBlock;
+    int64_t nPQForkTime;
+    int64_t nECDSASunsetTime;
 };
 
 /**
@@ -90,6 +103,9 @@ protected:
  * outside of the unit tests.
  */
 const CChainParams &Params();
+
+/** Modifiable parameters, for -pqforktime on testnet/regtest and unit tests */
+CChainParams &ModifiableParams();
 
 /** Sets the params returned by Params() to those for the given network. */
 void SelectParams(CChainParams::Network network);

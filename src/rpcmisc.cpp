@@ -109,6 +109,36 @@ public:
             obj.push_back(Pair("sigsrequired", nRequired));
         return obj;
     }
+
+    Object operator()(const CPQKeyID &keyID) const {
+        Object obj;
+        CPQPubKey pubkey;
+        pwalletMain->GetPQPubKey(keyID, pubkey);
+        obj.push_back(Pair("isscript", false));
+        obj.push_back(Pair("ispostquantum", true));
+        obj.push_back(Pair("algorithm", "ML-DSA-44"));
+        obj.push_back(Pair("pubkey", HexStr(pubkey.Raw())));
+        return obj;
+    }
+
+    Object operator()(const CScriptID256 &scriptID) const {
+        Object obj;
+        obj.push_back(Pair("isscript", true));
+        obj.push_back(Pair("ispostquantum", true));
+        CScript subscript;
+        pwalletMain->GetCScript256(scriptID, subscript);
+        std::vector<CTxDestination> addresses;
+        txnouttype whichType;
+        int nRequired;
+        ExtractDestinations(subscript, whichType, addresses, nRequired);
+        obj.push_back(Pair("script", GetTxnOutputType(whichType)));
+        obj.push_back(Pair("hex", HexStr(subscript.begin(), subscript.end())));
+        Array a;
+        BOOST_FOREACH(const CTxDestination& addr, addresses)
+            a.push_back(CBitcoinAddress(addr).ToString());
+        obj.push_back(Pair("addresses", a));
+        return obj;
+    }
 };
 #endif
 
@@ -129,6 +159,7 @@ Value validateaddress(const Array& params, bool fHelp)
         CTxDestination dest = address.Get();
         string currentAddress = address.ToString();
         ret.push_back(Pair("address", currentAddress));
+        ret.push_back(Pair("ispostquantum", address.IsPostQuantum()));
 #ifdef ENABLE_WALLET
         bool fMine = pwalletMain ? IsMine(*pwalletMain, dest) : false;
         ret.push_back(Pair("ismine", fMine));

@@ -202,6 +202,8 @@ std::string HelpMessage()
         strUsage += "  -daemon                " + _("Run in the background as a daemon and accept commands") + "\n";
 #endif
     strUsage += "  -testnet               " + _("Use the test network") + "\n";
+    strUsage += "  -pqforktime=<n>        " + _("Testnet/regtest only: block time of the post-quantum hard fork") + "\n";
+    strUsage += "  -ecdsasunsettime=<n>   " + _("Testnet/regtest only: block time after which ECDSA signatures are invalid") + "\n";
     strUsage += "  -debug=<category>      " + _("Output debugging information (default: 0, supplying <category> is optional)") + "\n";
     strUsage +=                               _("If <category> is not supplied, output all debugging information.") + "\n";
     strUsage +=                               _("<category> can be:");
@@ -338,7 +340,7 @@ bool AppInit2(boost::thread_group& threadGroup)
     nDerivationMethodIndex = 0;
 
     if (!SelectParamsFromCommandLine()) {
-        return InitError("Invalid combination of -testnet and -regtest.");
+        return InitError("Invalid combination of -testnet and -regtest, or -pqforktime/-ecdsasunsettime used outside testnet/regtest or out of order.");
     }
 
     if (mapArgs.count("-bind")) {

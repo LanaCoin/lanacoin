@@ -157,7 +157,7 @@ bool CCryptoKeyStore::SetCrypted()
     LOCK(cs_KeyStore);
     if (fUseCrypto)
         return true;
-    if (!mapKeys.empty())
+    if (!mapKeys.empty() || !mapPQKeys.empty())
         return false;
     fUseCrypto = true;
     return true;
@@ -199,6 +199,20 @@ bool CCryptoKeyStore::Unlock(const CKeyingMaterial& vMasterKeyIn)
             if (key.GetPubKey() == vchPubKey)
                 break;
             return false;
+        }
+        // Also check a post-quantum key, wallets may hold only those
+        CryptedPQKeyMap::const_iterator mpq = mapCryptedPQKeys.begin();
+        if (mpq != mapCryptedPQKeys.end())
+        {
+            const CPQPubKey &pubkey = mpq->second.first;
+            CKeyingMaterial vchSecret;
+            if (!DecryptSecret(vMasterKeyIn, mpq->second.second, pubkey.GetID(), vchSecret))
+                return false;
+            if (vchSecret.size() != PQ_SEED_SIZE)
+                return false;
+            CPQKey key;
+            if (!key.Set(&vchSecret[0], &vchSecret[0] + vchSecret.size()) || key.GetPubKey() != pubkey)
+                return false;
         }
         vMasterKey = vMasterKeyIn;
     }
@@ -301,6 +315,94 @@ bool CCryptoKeyStore::EncryptKeys(CKeyingMaterial& vMasterKeyIn)
                 return false;
         }
         mapKeys.clear();
+
+        BOOST_FOREACH(PQKeyMap::value_type& mKey, mapPQKeys)
+        {
+            const CPQKey &key = mKey.second;
+            CKeyingMaterial vchSecret(key.begin(), key.end());
+            std::vector<unsigned char> vchCryptedSecret;
+            if (!EncryptSecret(vMasterKeyIn, vchSecret, key.GetPubKey().GetID(), vchCryptedSecret))
+                return false;
+            if (!AddCryptedPQKey(key.GetPubKey(), vchCryptedSecret))
+                return false;
+        }
+        mapPQKeys.clear();
     }
     return true;
+}
+
+bool CCryptoKeyStore::AddCryptedPQKey(const CPQPubKey &pubkey, const std::vector<unsigned char> &vchCryptedSecret)
+{
+    LOCK(cs_KeyStore);
+    if (!SetCrypted())
+        return false;
+    mapCryptedPQKeys[pubkey.GetID()] = make_pair(pubkey, vchCryptedSecret);
+    return true;
+}
+
+bool CCryptoKeyStore::AddPQKey(const CPQKey &key)
+{
+    LOCK(cs_KeyStore);
+    if (!IsCrypted())
+        return CBasicKeyStore::AddPQKey(key);
+
+    if (IsLocked() || !key.IsValid())
+        return false;
+
+    std::vector<unsigned char> vchCryptedSecret;
+    CKeyingMaterial vchSecret(key.begin(), key.end());
+    if (!EncryptSecret(vMasterKey, vchSecret, key.GetPubKey().GetID(), vchCryptedSecret))
+        return false;
+    return AddCryptedPQKey(key.GetPubKey(), vchCryptedSecret);
+}
+
+bool CCryptoKeyStore::HavePQKey(const CPQKeyID &address) const
+{
+    LOCK(cs_KeyStore);
+    if (!IsCrypted())
+        return CBasicKeyStore::HavePQKey(address);
+    return mapCryptedPQKeys.count(address) > 0;
+}
+
+bool CCryptoKeyStore::GetPQKey(const CPQKeyID &address, CPQKey &keyOut) const
+{
+    LOCK(cs_KeyStore);
+    if (!IsCrypted())
+        return CBasicKeyStore::GetPQKey(address, keyOut);
+
+    CryptedPQKeyMap::const_iterator mi = mapCryptedPQKeys.find(address);
+    if (mi == mapCryptedPQKeys.end())
+        return false;
+    CKeyingMaterial vchSecret;
+    if (!DecryptSecret(vMasterKey, mi->second.second, mi->second.first.GetID(), vchSecret))
+        return false;
+    if (vchSecret.size() != PQ_SEED_SIZE)
+        return false;
+    return keyOut.Set(&vchSecret[0], &vchSecret[0] + vchSecret.size());
+}
+
+bool CCryptoKeyStore::GetPQPubKey(const CPQKeyID &address, CPQPubKey &pubKeyOut) const
+{
+    LOCK(cs_KeyStore);
+    if (!IsCrypted())
+        return CBasicKeyStore::GetPQPubKey(address, pubKeyOut);
+
+    CryptedPQKeyMap::const_iterator mi = mapCryptedPQKeys.find(address);
+    if (mi == mapCryptedPQKeys.end())
+        return false;
+    pubKeyOut = mi->second.first;
+    return true;
+}
+
+void CCryptoKeyStore::GetPQKeys(std::set<CPQKeyID> &setAddress) const
+{
+    if (!IsCrypted())
+    {
+        CBasicKeyStore::GetPQKeys(setAddress);
+        return;
+    }
+    setAddress.clear();
+    LOCK(cs_KeyStore);
+    for (CryptedPQKeyMap::const_iterator mi = mapCryptedPQKeys.begin(); mi != mapCryptedPQKeys.end(); ++mi)
+        setAddress.insert(mi->first);
 }

@@ -132,6 +132,7 @@ class CCryptoKeyStore : public CBasicKeyStore
 {
 private:
     CryptedKeyMap mapCryptedKeys;
+    CryptedPQKeyMap mapCryptedPQKeys;
 
     CKeyingMaterial vMasterKey;
 
@@ -200,6 +201,14 @@ public:
             mi++;
         }
     }
+
+    // Post-quantum keys; the 32 byte seed is encrypted like an ECDSA secret
+    virtual bool AddCryptedPQKey(const CPQPubKey &pubkey, const std::vector<unsigned char> &vchCryptedSecret);
+    bool AddPQKey(const CPQKey &key);
+    bool HavePQKey(const CPQKeyID &address) const;
+    bool GetPQKey(const CPQKeyID &address, CPQKey &keyOut) const;
+    bool GetPQPubKey(const CPQKeyID &address, CPQPubKey &pubKeyOut) const;
+    void GetPQKeys(std::set<CPQKeyID> &setAddress) const;
 
     /* Wallet status (encrypted, locked) changed.
      * Note: Called without locks held.

@@ -19,6 +19,7 @@ using namespace boost;
 #include "util.h"
 
 bool CheckSig(vector<unsigned char> vchSig, const vector<unsigned char> &vchPubKey, const CScript &scriptCode, const CTransaction& txTo, unsigned int nIn, int nHashType, int flags);
+bool CheckSigPQ(vector<unsigned char> vchSig, const CPQPubKey &pubkey, const CScript &scriptCode, const CTransaction& txTo, unsigned int nIn, int nHashType, int flags);
 
 static const valtype vchFalse(0);
 static const valtype vchZero(0);
@@ -105,6 +106,8 @@ const char* GetTxnOutputType(txnouttype t)
     case TX_SCRIPTHASH: return "scripthash";
     case TX_MULTISIG: return "multisig";
     case TX_NULL_DATA: return "nulldata";
+    case TX_PQKEYHASH: return "pqkeyhash";
+    case TX_SCRIPTHASH256: return "scripthash256";
     }
     return NULL;
 }
@@ -240,6 +243,10 @@ const char* GetOpName(opcodetype opcode)
     case OP_NOP8                   : return "OP_NOP8";
     case OP_NOP9                   : return "OP_NOP9";
     case OP_NOP10                  : return "OP_NOP10";
+
+    // post-quantum
+    case OP_CHECKSIGPQ             : return "OP_CHECKSIGPQ";
+    case OP_CHECKSIGPQVERIFY       : return "OP_CHECKSIGPQVERIFY";
 
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
@@ -406,7 +413,9 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
     valtype vchPushValue;
     vector<bool> vfExec;
     vector<valtype> altstack;
-    if (script.size() > 10000)
+    const bool fPQ = (flags & SCRIPT_VERIFY_PQ) != 0;
+    const unsigned int nMaxElementSize = fPQ ? MAX_SCRIPT_ELEMENT_SIZE_PQ : MAX_SCRIPT_ELEMENT_SIZE;
+    if (script.size() > (fPQ ? MAX_SCRIPT_SIZE_PQ : MAX_SCRIPT_SIZE))
         return false;
     int nOpCount = 0;
 
@@ -422,7 +431,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
             //
             if (!script.GetOp(pc, opcode, vchPushValue))
                 return false;
-            if (vchPushValue.size() > MAX_SCRIPT_ELEMENT_SIZE)
+            if (vchPushValue.size() > nMaxElementSize)
                 return false;
             if (opcode > OP_16 && ++nOpCount > 201)
                 return false;
@@ -1118,6 +1127,10 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
                 case OP_CHECKSIG:
                 case OP_CHECKSIGVERIFY:
                 {
+                    // ECDSA is not quantum safe and invalid after the sunset
+                    if (flags & SCRIPT_VERIFY_NO_ECDSA)
+                        return false;
+
                     // (sig pubkey -- bool)
                     if (stack.size() < 2)
                         return false;
@@ -1153,6 +1166,9 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
                 case OP_CHECKMULTISIG:
                 case OP_CHECKMULTISIGVERIFY:
                 {
+                    if (flags & SCRIPT_VERIFY_NO_ECDSA)
+                        return false;
+
                     // ([sig ...] num_of_signatures [pubkey ...] num_of_pubkeys -- bool)
 
                     int i = 1;
@@ -1234,6 +1250,47 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
                     stack.push_back(fSuccess ? vchTrue : vchFalse);
 
                     if (opcode == OP_CHECKMULTISIGVERIFY)
+                    {
+                        if (fSuccess)
+                            popstack(stack);
+                        else
+                            return false;
+                    }
+                }
+                break;
+
+                case OP_CHECKSIGPQ:
+                case OP_CHECKSIGPQVERIFY:
+                {
+                    // Before the post-quantum fork these are unknown opcodes
+                    if (!fPQ)
+                        return false;
+
+                    // (sig pubkey -- bool)
+                    if (stack.size() < 2)
+                        return false;
+
+                    valtype& vchSig    = stacktop(-2);
+                    valtype& vchPubKey = stacktop(-1);
+
+                    // Strict encoding: a known post-quantum public key, and a
+                    // signature of the right size with a defined hash type.
+                    // An empty signature is a valid encoding that fails.
+                    CPQPubKey pubkey(vchPubKey);
+                    if (!pubkey.IsValid())
+                        return false;
+                    if (!vchSig.empty() && (vchSig.size() != PQ_SIGNATURE_SIZE + 1 || !IsDefinedHashtypeSignature(vchSig)))
+                        return false;
+
+                    // Subset of script starting at the most recent codeseparator
+                    CScript scriptCode(pbegincodehash, pend);
+
+                    bool fSuccess = !vchSig.empty() && CheckSigPQ(vchSig, pubkey, scriptCode, txTo, nIn, nHashType, flags);
+
+                    popstack(stack);
+                    popstack(stack);
+                    stack.push_back(fSuccess ? vchTrue : vchFalse);
+                    if (opcode == OP_CHECKSIGPQVERIFY)
                     {
                         if (fSuccess)
                             popstack(stack);
@@ -1422,6 +1479,89 @@ bool CheckSig(vector<unsigned char> vchSig, const vector<unsigned char> &vchPubK
     return true;
 }
 
+// Valid post-quantum signatures, keyed by the hash of (signature hash,
+// signature, public key) so that an entry only takes 32 bytes
+class CSignatureCachePQ
+{
+private:
+    std::set<uint256> setValid;
+    boost::shared_mutex cs_sigcache;
+
+    static uint256 Key(const uint256 &hash, const std::vector<unsigned char>& vchSig, const CPQPubKey& pubKey)
+    {
+        CHashWriter ss(SER_GETHASH, 0);
+        ss << hash << vchSig << pubKey;
+        return ss.GetHash();
+    }
+
+public:
+    bool Get(const uint256 &hash, const std::vector<unsigned char>& vchSig, const CPQPubKey& pubKey)
+    {
+        uint256 k = Key(hash, vchSig, pubKey);
+        boost::shared_lock<boost::shared_mutex> lock(cs_sigcache);
+        return setValid.count(k) != 0;
+    }
+
+    void Set(const uint256 &hash, const std::vector<unsigned char>& vchSig, const CPQPubKey& pubKey)
+    {
+        int64_t nMaxCacheSize = GetArg("-maxsigcachesize", 50000);
+        if (nMaxCacheSize <= 0) return;
+
+        uint256 k = Key(hash, vchSig, pubKey);
+        boost::unique_lock<boost::shared_mutex> lock(cs_sigcache);
+
+        while (static_cast<int64_t>(setValid.size()) > nMaxCacheSize)
+        {
+            // Evict a random entry
+            std::set<uint256>::iterator it = setValid.lower_bound(GetRandHash());
+            if (it == setValid.end())
+                it = setValid.begin();
+            setValid.erase(it);
+        }
+        setValid.insert(k);
+    }
+};
+
+bool CheckSigPQ(vector<unsigned char> vchSig, const CPQPubKey &pubkey, const CScript &scriptCode,
+                const CTransaction& txTo, unsigned int nIn, int nHashType, int flags)
+{
+    static CSignatureCachePQ signatureCache;
+
+    if (!pubkey.IsValid())
+        return false;
+
+    // Hash type is one byte tacked on to the end of the signature
+    if (vchSig.empty())
+        return false;
+    if (nHashType == 0)
+        nHashType = vchSig.back();
+    else if (nHashType != vchSig.back())
+        return false;
+    vchSig.pop_back();
+
+    // SignatureHash() returns the constant 1 for an input out of range and
+    // for SIGHASH_SINGLE without a matching output (the "SIGHASH_SINGLE bug");
+    // a signature of that would be valid for any such input, so the new
+    // opcode does not accept it
+    if (nIn >= txTo.vin.size())
+        return false;
+    if ((nHashType & 0x1f) == SIGHASH_SINGLE && nIn >= txTo.vout.size())
+        return false;
+
+    uint256 sighash = SignatureHash(scriptCode, txTo, nIn, nHashType);
+
+    if (signatureCache.Get(sighash, vchSig, pubkey))
+        return true;
+
+    if (!pubkey.Verify(sighash, vchSig, PQ_DOMAIN_TX))
+        return false;
+
+    if (!(flags & SCRIPT_VERIFY_NOCACHE))
+        signatureCache.Set(sighash, vchSig, pubkey);
+
+    return true;
+}
+
 
 
 
@@ -1451,6 +1591,10 @@ bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, vector<vector<unsi
         // Empty, provably prunable, data-carrying output
         mTemplates.insert(make_pair(TX_NULL_DATA, CScript() << OP_RETURN << OP_SMALLDATA));
         mTemplates.insert(make_pair(TX_NULL_DATA, CScript() << OP_RETURN));
+
+        // Post-quantum key hash: sender provides the 256 bit hash of the
+        // post-quantum public key, receiver provides signature and public key
+        mTemplates.insert(make_pair(TX_PQKEYHASH, CScript() << OP_DUP << OP_HASH256 << OP_PQKEYHASH << OP_EQUALVERIFY << OP_CHECKSIGPQ));
     }
 
     // Shortcut for pay-to-script-hash, which are more constrained than the other types:
@@ -1459,6 +1603,15 @@ bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, vector<vector<unsi
     {
         typeRet = TX_SCRIPTHASH;
         vector<unsigned char> hashBytes(scriptPubKey.begin()+2, scriptPubKey.begin()+22);
+        vSolutionsRet.push_back(hashBytes);
+        return true;
+    }
+
+    // Same for the 256 bit variant: OP_HASH256 32 [32 byte hash] OP_EQUAL
+    if (scriptPubKey.IsPayToScriptHash256())
+    {
+        typeRet = TX_SCRIPTHASH256;
+        vector<unsigned char> hashBytes(scriptPubKey.begin()+2, scriptPubKey.begin()+34);
         vSolutionsRet.push_back(hashBytes);
         return true;
     }
@@ -1524,6 +1677,12 @@ bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, vector<vector<unsi
                     break;
                 vSolutionsRet.push_back(vch1);
             }
+            else if (opcode2 == OP_PQKEYHASH)
+            {
+                if (vch1.size() != sizeof(uint256))
+                    break;
+                vSolutionsRet.push_back(vch1);
+            }
             else if (opcode2 == OP_SMALLINTEGER)
             {   // Single-byte small integer pushed onto vSolutions
                 if (opcode1 == OP_0 ||
@@ -1584,6 +1743,21 @@ bool SignN(const vector<valtype>& multisigdata, const CKeyStore& keystore, uint2
     return nSigned==nRequired;
 }
 
+bool Sign1PQ(const CPQKeyID& address, const CKeyStore& keystore, uint256 hash, int nHashType, CScript& scriptSigRet)
+{
+    CPQKey key;
+    if (!keystore.GetPQKey(address, key))
+        return false;
+
+    vector<unsigned char> vchSig;
+    if (!key.Sign(hash, vchSig, PQ_DOMAIN_TX))
+        return false;
+    vchSig.push_back((unsigned char)nHashType);
+    scriptSigRet << vchSig;
+
+    return true;
+}
+
 //
 // Sign scriptPubKey with private keys stored in keystore, given transaction hash and hash type.
 // Signatures are returned in scriptSigRet (or returns false if scriptPubKey can't be signed),
@@ -1625,6 +1799,20 @@ bool Solver(const CKeyStore& keystore, const CScript& scriptPubKey, uint256 hash
     case TX_MULTISIG:
         scriptSigRet << OP_0; // workaround CHECKMULTISIG bug
         return (SignN(vSolutions, keystore, hash, nHashType, scriptSigRet));
+
+    case TX_PQKEYHASH:
+    {
+        CPQKeyID pqKeyID = CPQKeyID(uint256(vSolutions[0]));
+        CPQPubKey pubkey;
+        if (!keystore.GetPQPubKey(pqKeyID, pubkey))
+            return false;
+        if (!Sign1PQ(pqKeyID, keystore, hash, nHashType, scriptSigRet))
+            return false;
+        scriptSigRet << pubkey;
+        return true;
+    }
+    case TX_SCRIPTHASH256:
+        return keystore.GetCScript256(uint256(vSolutions[0]), scriptSigRet);
     }
     return false;
 }
@@ -1645,7 +1833,10 @@ int ScriptSigArgsExpected(txnouttype t, const std::vector<std::vector<unsigned c
             return -1;
         return vSolutions[0][0] + 1;
     case TX_SCRIPTHASH:
+    case TX_SCRIPTHASH256:
         return 1; // doesn't include args needed by the script
+    case TX_PQKEYHASH:
+        return 2;
     }
     return -1;
 }
@@ -1693,6 +1884,8 @@ public:
     bool operator()(const CNoDestination &dest) const { return false; }
     bool operator()(const CKeyID &keyID) const { return keystore->HaveKey(keyID); }
     bool operator()(const CScriptID &scriptID) const { return keystore->HaveCScript(scriptID); }
+    bool operator()(const CPQKeyID &keyID) const { return keystore->HavePQKey(keyID); }
+    bool operator()(const CScriptID256 &scriptID) const { return keystore->HaveCScript256(scriptID); }
 };
 
 bool IsMine(const CKeyStore &keystore, const CTxDestination &dest)
@@ -1736,6 +1929,15 @@ bool IsMine(const CKeyStore &keystore, const CScript& scriptPubKey)
         vector<valtype> keys(vSolutions.begin()+1, vSolutions.begin()+vSolutions.size()-1);
         return HaveKeys(keys, keystore) == keys.size();
     }
+    case TX_PQKEYHASH:
+        return keystore.HavePQKey(CPQKeyID(uint256(vSolutions[0])));
+    case TX_SCRIPTHASH256:
+    {
+        CScript subscript;
+        if (!keystore.GetCScript256(CScriptID256(uint256(vSolutions[0])), subscript))
+            return false;
+        return IsMine(keystore, subscript);
+    }
     }
     return false;
 }
@@ -1760,6 +1962,16 @@ bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
     else if (whichType == TX_SCRIPTHASH)
     {
         addressRet = CScriptID(uint160(vSolutions[0]));
+        return true;
+    }
+    else if (whichType == TX_PQKEYHASH)
+    {
+        addressRet = CPQKeyID(uint256(vSolutions[0]));
+        return true;
+    }
+    else if (whichType == TX_SCRIPTHASH256)
+    {
+        addressRet = CScriptID256(uint256(vSolutions[0]));
         return true;
     }
     // Multisig txns have more than one address...
@@ -1792,6 +2004,15 @@ public:
     void operator()(const CScriptID &scriptId) {
         CScript script;
         if (keystore.GetCScript(scriptId, script))
+            Process(script);
+    }
+
+    // Only ECDSA keys are collected (used for key birth times)
+    void operator()(const CPQKeyID &keyId) {}
+
+    void operator()(const CScriptID256 &scriptId) {
+        CScript script;
+        if (keystore.GetCScript256(scriptId, script))
             Process(script);
     }
 
@@ -1870,6 +2091,24 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
         return CastToBool(stackCopy.back());
     }
 
+    // Same for the 256 bit variant after the post-quantum fork. Before the
+    // fork such outputs are evaluated as the plain hash puzzle they are.
+    if ((flags & SCRIPT_VERIFY_PQ) && scriptPubKey.IsPayToScriptHash256())
+    {
+        if (!scriptSig.IsPushOnly())
+            return false;
+        // stackCopy is not empty: the hash puzzle above needed an element
+        const valtype& pubKeySerialized = stackCopy.back();
+        CScript pubKey2(pubKeySerialized.begin(), pubKeySerialized.end());
+        popstack(stackCopy);
+
+        if (!EvalScript(stackCopy, pubKey2, txTo, nIn, flags, nHashType))
+            return false;
+        if (stackCopy.empty())
+            return false;
+        return CastToBool(stackCopy.back());
+    }
+
     return true;
 }
 
@@ -1904,9 +2143,22 @@ bool SignSignature(const CKeyStore &keystore, const CScript& fromPubKey, CTransa
         txin.scriptSig << static_cast<valtype>(subscript);
         if (!fSolved) return false;
     }
+    else if (whichType == TX_SCRIPTHASH256)
+    {
+        CScript subscript = txin.scriptSig;
+        uint256 hash2 = SignatureHash(subscript, txTo, nIn, nHashType);
 
-    // Test solution
-    return VerifyScript(txin.scriptSig, fromPubKey, txTo, nIn, STANDARD_SCRIPT_VERIFY_FLAGS, 0);
+        txnouttype subType;
+        bool fSolved =
+            Solver(keystore, subscript, hash2, nHashType, txin.scriptSig, subType) &&
+            subType != TX_SCRIPTHASH && subType != TX_SCRIPTHASH256;
+        txin.scriptSig << static_cast<valtype>(subscript);
+        if (!fSolved) return false;
+    }
+
+    // Test solution; post-quantum scripts can be signed before the fork
+    // activates, so check them with the post-quantum rules
+    return VerifyScript(txin.scriptSig, fromPubKey, txTo, nIn, STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ, 0);
 }
 
 bool SignSignature(const CKeyStore &keystore, const CTransaction& txFrom, CTransaction& txTo, unsigned int nIn, int nHashType)
@@ -2011,11 +2263,13 @@ static CScript CombineSignatures(CScript scriptPubKey, const CTransaction& txTo,
         return PushAll(sigs2);
     case TX_PUBKEY:
     case TX_PUBKEYHASH:
+    case TX_PQKEYHASH:
         // Signatures are bigger than placeholders or empty scripts:
         if (sigs1.empty() || sigs1[0].empty())
             return PushAll(sigs2);
         return PushAll(sigs1);
     case TX_SCRIPTHASH:
+    case TX_SCRIPTHASH256:
         if (sigs1.empty() || sigs1.back().empty())
             return PushAll(sigs2);
         else if (sigs2.empty() || sigs2.back().empty())
@@ -2049,10 +2303,11 @@ CScript CombineSignatures(CScript scriptPubKey, const CTransaction& txTo, unsign
     vector<vector<unsigned char> > vSolutions;
     Solver(scriptPubKey, txType, vSolutions);
 
+    // SCRIPT_VERIFY_PQ allows the larger pushes of post-quantum signatures
     vector<valtype> stack1;
-    EvalScript(stack1, scriptSig1, CTransaction(), 0, SCRIPT_VERIFY_NONE, 0);
+    EvalScript(stack1, scriptSig1, CTransaction(), 0, SCRIPT_VERIFY_PQ, 0);
     vector<valtype> stack2;
-    EvalScript(stack2, scriptSig2, CTransaction(), 0, SCRIPT_VERIFY_NONE, 0);
+    EvalScript(stack2, scriptSig2, CTransaction(), 0, SCRIPT_VERIFY_PQ, 0);
 
     return CombineSignatures(scriptPubKey, txTo, nIn, txType, vSolutions, stack1, stack2);
 }
@@ -2114,6 +2369,49 @@ bool CScript::IsPayToScriptHash() const
             this->at(22) == OP_EQUAL);
 }
 
+bool CScript::IsPayToScriptHash256() const
+{
+    return (this->size() == 35 &&
+            this->at(0) == OP_HASH256 &&
+            this->at(1) == 0x20 &&
+            this->at(34) == OP_EQUAL);
+}
+
+unsigned int CScript::GetPQSigOpCount() const
+{
+    unsigned int n = 0;
+    const_iterator pc = begin();
+    while (pc < end())
+    {
+        opcodetype opcode;
+        if (!GetOp(pc, opcode))
+            break;
+        if (opcode == OP_CHECKSIGPQ || opcode == OP_CHECKSIGPQVERIFY)
+            n++;
+    }
+    return n;
+}
+
+unsigned int CScript::GetPQSigOpCount(const CScript& scriptSig) const
+{
+    if (!IsPayToScriptHash256())
+        return GetPQSigOpCount();
+
+    // The redeem script is the last item the scriptSig pushes
+    const_iterator pc = scriptSig.begin();
+    vector<unsigned char> data;
+    while (pc < scriptSig.end())
+    {
+        opcodetype opcode;
+        if (!scriptSig.GetOp(pc, opcode, data))
+            return 0;
+        if (opcode > OP_16)
+            return 0;
+    }
+    CScript subscript(data.begin(), data.end());
+    return subscript.GetPQSigOpCount();
+}
+
 bool CScript::HasCanonicalPushes() const
 {
     const_iterator pc = begin();
@@ -2162,6 +2460,18 @@ public:
     bool operator()(const CScriptID &scriptID) const {
         script->clear();
         *script << OP_HASH160 << scriptID << OP_EQUAL;
+        return true;
+    }
+
+    bool operator()(const CPQKeyID &keyID) const {
+        script->clear();
+        *script << OP_DUP << OP_HASH256 << keyID << OP_EQUALVERIFY << OP_CHECKSIGPQ;
+        return true;
+    }
+
+    bool operator()(const CScriptID256 &scriptID) const {
+        script->clear();
+        *script << OP_HASH256 << scriptID << OP_EQUAL;
         return true;
     }
 };

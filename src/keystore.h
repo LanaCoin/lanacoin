@@ -6,6 +6,7 @@
 #define BITCOIN_KEYSTORE_H
 
 #include "key.h"
+#include "pqkey.h"
 #include "sync.h"
 #include <boost/signals2/signal.hpp>
 
@@ -34,10 +35,24 @@ public:
     virtual bool AddCScript(const CScript& redeemScript) =0;
     virtual bool HaveCScript(const CScriptID &hash) const =0;
     virtual bool GetCScript(const CScriptID &hash, CScript& redeemScriptOut) const =0;
+
+    // Post-quantum keys
+    virtual bool AddPQKey(const CPQKey &key) =0;
+    virtual bool HavePQKey(const CPQKeyID &address) const =0;
+    virtual bool GetPQKey(const CPQKeyID &address, CPQKey &keyOut) const =0;
+    virtual bool GetPQPubKey(const CPQKeyID &address, CPQPubKey &pubKeyOut) const =0;
+    virtual void GetPQKeys(std::set<CPQKeyID> &setAddress) const =0;
+
+    // Redeem scripts referenced by a 256 bit hash (P2SH256)
+    virtual bool AddCScript256(const CScript& redeemScript) =0;
+    virtual bool HaveCScript256(const CScriptID256 &hash) const =0;
+    virtual bool GetCScript256(const CScriptID256 &hash, CScript& redeemScriptOut) const =0;
 };
 
 typedef std::map<CKeyID, CKey> KeyMap;
 typedef std::map<CScriptID, CScript > ScriptMap;
+typedef std::map<CPQKeyID, CPQKey> PQKeyMap;
+typedef std::map<CScriptID256, CScript> Script256Map;
 
 /** Basic key store, that keeps keys in an address->secret map */
 class CBasicKeyStore : public CKeyStore
@@ -45,8 +60,19 @@ class CBasicKeyStore : public CKeyStore
 protected:
     KeyMap mapKeys;
     ScriptMap mapScripts;
+    PQKeyMap mapPQKeys;
+    Script256Map mapScripts256;
 
 public:
+    bool AddPQKey(const CPQKey &key);
+    bool HavePQKey(const CPQKeyID &address) const;
+    bool GetPQKey(const CPQKeyID &address, CPQKey &keyOut) const;
+    bool GetPQPubKey(const CPQKeyID &address, CPQPubKey &pubKeyOut) const;
+    void GetPQKeys(std::set<CPQKeyID> &setAddress) const;
+    virtual bool AddCScript256(const CScript& redeemScript);
+    virtual bool HaveCScript256(const CScriptID256 &hash) const;
+    virtual bool GetCScript256(const CScriptID256 &hash, CScript& redeemScriptOut) const;
+
     bool AddKeyPubKey(const CKey& key, const CPubKey &pubkey);
     bool HaveKey(const CKeyID &address) const
     {
@@ -89,5 +115,6 @@ public:
 };
 
 typedef std::map<CKeyID, std::pair<CPubKey, std::vector<unsigned char> > > CryptedKeyMap;
+typedef std::map<CPQKeyID, std::pair<CPQPubKey, std::vector<unsigned char> > > CryptedPQKeyMap;
 
 #endif
