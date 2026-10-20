@@ -139,4 +139,48 @@ BOOST_AUTO_TEST_CASE(key_test1)
     }
 }
 
+BOOST_AUTO_TEST_CASE(key_load_check)
+{
+    CKey key;
+    key.MakeNewKey(true);
+    CPubKey pubkey = key.GetPubKey();
+    CPrivKey privkey = key.GetPrivKey();
+
+    CKey other;
+    other.MakeNewKey(true);
+    CPubKey pubkeyOther = other.GetPubKey();
+
+    // Loading with full key check (wallet records without a checksum)
+    CKey loaded;
+    BOOST_CHECK(loaded.Load(privkey, pubkey, false));
+    BOOST_CHECK(loaded.GetPubKey() == pubkey);
+    BOOST_CHECK(!loaded.Load(privkey, pubkeyOther, false));
+
+    CPrivKey corrupted = privkey;
+    corrupted[10] ^= 1;
+    BOOST_CHECK(!loaded.Load(corrupted, pubkey, false));
+
+    CKey set;
+    BOOST_CHECK(set.SetPrivKey(privkey, true));
+    BOOST_CHECK(set.GetPubKey() == pubkey);
+}
+
+BOOST_AUTO_TEST_CASE(key_derive_public)
+{
+    // Public (non-hardened) derivation must match private derivation
+    CKey key;
+    key.MakeNewKey(true);
+    unsigned char cc[32] = {1};
+    for (unsigned int nChild = 0; nChild < 4; nChild++)
+    {
+        unsigned char ccPriv[32], ccPub[32];
+        CKey keyChild;
+        CPubKey pubkeyChild;
+        BOOST_CHECK(key.Derive(keyChild, ccPriv, nChild, cc));
+        BOOST_CHECK(key.GetPubKey().Derive(pubkeyChild, ccPub, nChild, cc));
+        BOOST_CHECK(keyChild.GetPubKey() == pubkeyChild);
+        BOOST_CHECK(memcmp(ccPriv, ccPub, 32) == 0);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

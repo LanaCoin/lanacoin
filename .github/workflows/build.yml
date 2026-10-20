@@ -15,12 +15,40 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libdb++-dev zlib1g-dev \
             libboost-system-dev libboost-filesystem-dev libboost-program-options-dev \
-            libboost-thread-dev libboost-chrono-dev libboost-timer-dev
+            libboost-thread-dev libboost-chrono-dev libboost-timer-dev libboost-test-dev
 
       - name: Build lanacoind
         working-directory: src
         run: make -f makefile.unix -j"$(nproc)" USE_UPNP=-
 
+      - name: Build unit tests
+        working-directory: src
+        run: make -f makefile.unix -j"$(nproc)" USE_UPNP=- test_lanacoin
+
+      - name: Run unit tests
+        working-directory: src
+        run: ./test_lanacoin
+
       - name: Smoke test
         working-directory: src
         run: ./lanacoind -? | head -n 5
+
+  lanacoin-qt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libdb++-dev zlib1g-dev \
+            libboost-system-dev libboost-filesystem-dev libboost-program-options-dev \
+            libboost-thread-dev libboost-chrono-dev libboost-timer-dev \
+            qt6-base-dev qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools qt6-5compat-dev libgl-dev
+
+      - name: Build lanacoin-qt
+        run: |
+          mkdir build-qt
+          cd build-qt
+          /usr/lib/qt6/bin/qmake ../lanacoin-qt.pro USE_UPNP=-
+          make -j"$(nproc)"
