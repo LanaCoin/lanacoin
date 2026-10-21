@@ -104,19 +104,17 @@ public:
     }
     bool connect(const std::string& server, const std::string& port)
     {
-#if BOOST_VERSION >= 107000
         boost::asio::ip::tcp::resolver resolver(stream.get_executor());
-#else
-        boost::asio::ip::tcp::resolver resolver(stream.lowest_layer().get_io_service());
-#endif
-        boost::asio::ip::tcp::resolver::query query(server.c_str(), port.c_str());
-        boost::asio::ip::tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
-        boost::asio::ip::tcp::resolver::iterator end;
-        boost::system::error_code error = boost::asio::error::host_not_found;
-        while (error && endpoint_iterator != end)
+        boost::system::error_code error;
+        boost::asio::ip::tcp::resolver::results_type endpoints = resolver.resolve(server, port, error);
+        if (error)
+            return false;
+        error = boost::asio::error::host_not_found;
+        for (boost::asio::ip::tcp::resolver::results_type::const_iterator it = endpoints.begin();
+             error && it != endpoints.end(); ++it)
         {
             stream.lowest_layer().close();
-            stream.lowest_layer().connect(*endpoint_iterator++, error);
+            stream.lowest_layer().connect(it->endpoint(), error);
         }
         if (error)
             return false;

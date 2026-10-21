@@ -37,10 +37,15 @@ using namespace json_spirit;
 static std::string strRPCUserColonPass;
 
 // These are created by StartRPCThreads, destroyed in StopRPCThreads
-static asio::io_service* rpc_io_service = NULL;
-static map<string, boost::shared_ptr<deadline_timer> > deadlineTimers;
+static asio::io_context* rpc_io_service = NULL;
+static map<string, boost::shared_ptr<asio::steady_timer> > deadlineTimers;
 static ssl::context* rpc_ssl_context = NULL;
 static boost::thread_group* rpc_worker_group = NULL;
+
+static void RunIOContext(asio::io_context* ctx)
+{
+    ctx->run();
+}
 
 void RPCTypeCheck(const Array& params,
                   const list<Value_type>& typesExpected,
@@ -344,16 +349,28 @@ void ErrorReply(std::ostream& stream, const Object& objError, const Value& id)
 bool ClientAllowed(const boost::asio::ip::address& address)
 {
     // Make sure that IPv4-compatible and IPv4-mapped IPv6 addresses are treated as IPv4 addresses
-    if (address.is_v6()
-     && (address.to_v6().is_v4_compatible()
-      || address.to_v6().is_v4_mapped()))
-        return ClientAllowed(address.to_v6().to_v4());
+    // (written without the address_v6 helpers that newer Boost versions removed)
+    if (address.is_v6())
+    {
+        asio::ip::address_v6::bytes_type bytes = address.to_v6().to_bytes();
+        bool fPrefixZero = true;
+        for (int i = 0; i < 10; i++)
+            fPrefixZero = fPrefixZero && bytes[i] == 0;
+        bool fMapped = fPrefixZero && bytes[10] == 0xff && bytes[11] == 0xff;
+        bool fCompatible = fPrefixZero && bytes[10] == 0 && bytes[11] == 0 &&
+                           !address.to_v6().is_unspecified() && !address.to_v6().is_loopback();
+        if (fMapped || fCompatible)
+        {
+            asio::ip::address_v4::bytes_type v4 = {{bytes[12], bytes[13], bytes[14], bytes[15]}};
+            return ClientAllowed(asio::ip::address(asio::ip::address_v4(v4)));
+        }
+    }
 
-    if (address == asio::ip::address_v4::loopback()
-     || address == asio::ip::address_v6::loopback()
+    if (address == asio::ip::address(asio::ip::address_v4::loopback())
+     || address == asio::ip::address(asio::ip::address_v6::loopback())
      || (address.is_v4()
          // Check whether IPv4 addresses match 127.0.0.0/8 (loopback subnet)
-      && (address.to_v4().to_ulong() & 0xff000000) == 0x7f000000))
+      && (address.to_v4().to_uint() & 0xff000000) == 0x7f000000))
         return true;
 
     const string strAddress = address.to_string();
@@ -378,11 +395,12 @@ template <typename Protocol>
 class AcceptedConnectionImpl : public AcceptedConnection
 {
 public:
+    template <typename Executor>
     AcceptedConnectionImpl(
-            asio::io_service& io_service,
+            const Executor& executor,
             ssl::context &context,
             bool fUseSSL) :
-        sslStream(io_service, context),
+        sslStream(executor, context),
         _d(sslStream, fUseSSL),
         _stream(_d)
     {
@@ -421,12 +439,6 @@ static void RPCAcceptHandler(boost::shared_ptr< basic_socket_acceptor<Protocol> 
                              AcceptedConnection* conn,
                              const boost::system::error_code& error);
 
-#if BOOST_VERSION >= 107000
-#define GET_IO_SERVICE(s) ((boost::asio::io_context&)(s)->get_executor().context())
-#else
-#define GET_IO_SERVICE(s) ((s)->get_io_service())
-#endif
-
 /**
  * Sets up I/O resources to accept and handle a new connection.
  */
@@ -436,7 +448,7 @@ static void RPCListen(boost::shared_ptr< basic_socket_acceptor<Protocol> > accep
                    const bool fUseSSL)
 {
     // Accept connection
-    AcceptedConnectionImpl<Protocol>* conn = new AcceptedConnectionImpl<Protocol>(GET_IO_SERVICE(acceptor), context, fUseSSL);
+    AcceptedConnectionImpl<Protocol>* conn = new AcceptedConnectionImpl<Protocol>(acceptor->get_executor(), context, fUseSSL);
 
     acceptor->async_accept(
             conn->sslStream.lowest_layer(),
@@ -508,7 +520,7 @@ void StartRPCThreads()
     }
 
     assert(rpc_io_service == NULL);
-    rpc_io_service = new asio::io_service();
+    rpc_io_service = new asio::io_context();
     rpc_ssl_context = new ssl::context(ssl::context::method::tlsv12);
 
     const bool fUseSSL = GetBoolArg("-rpcssl", false);
@@ -591,7 +603,7 @@ void StartRPCThreads()
 
     rpc_worker_group = new boost::thread_group();
     for (int i = 0; i < GetArg("-rpcthreads", 4); i++)
-        rpc_worker_group->create_thread(boost::bind(&asio::io_service::run, rpc_io_service));
+        rpc_worker_group->create_thread(boost::bind(&RunIOContext, rpc_io_service));
 }
 
 void StopRPCThreads()
@@ -621,9 +633,9 @@ void RPCRunLater(const std::string& name, boost::function<void(void)> func, int6
     if (deadlineTimers.count(name) == 0)
     {
         deadlineTimers.insert(make_pair(name,
-                                        boost::shared_ptr<deadline_timer>(new deadline_timer(*rpc_io_service))));
+                                        boost::shared_ptr<asio::steady_timer>(new asio::steady_timer(*rpc_io_service))));
     }
-    deadlineTimers[name]->expires_from_now(posix_time::seconds(nSeconds));
+    deadlineTimers[name]->expires_after(std::chrono::seconds(nSeconds));
     deadlineTimers[name]->async_wait(boost::bind(RPCRunHandler, boost::placeholders::_1, func));
 }
 

@@ -34,7 +34,7 @@ Object CallRPC(const string& strMethod, const Array& params)
 {
     // Connect to localhost
     bool fUseSSL = GetBoolArg("-rpcssl", false);
-    asio::io_service io_service;
+    asio::io_context io_service;
     ssl::context context(ssl::context::method::tlsv12);
     context.set_options(ssl::context::no_tlsv1);
     asio::ssl::stream<asio::ip::tcp::socket> sslStream(io_service, context);
