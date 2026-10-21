@@ -200,10 +200,10 @@ struct secure_allocator : public std::allocator<T>
     typedef std::allocator<T> base;
     typedef typename base::size_type size_type;
     typedef typename base::difference_type  difference_type;
-    typedef typename base::pointer pointer;
-    typedef typename base::const_pointer const_pointer;
-    typedef typename base::reference reference;
-    typedef typename base::const_reference const_reference;
+    typedef T* pointer;
+    typedef const T* const_pointer;
+    typedef T& reference;
+    typedef const T& const_reference;
     typedef typename base::value_type value_type;
     secure_allocator() throw() {}
     secure_allocator(const secure_allocator& a) throw() : base(a) {}
@@ -216,7 +216,7 @@ struct secure_allocator : public std::allocator<T>
     T* allocate(std::size_t n, const void *hint = 0)
     {
         T *p;
-        p = std::allocator<T>::allocate(n, hint);
+        p = std::allocator<T>::allocate(n); // the hint overload was removed in C++20
         if (p != NULL)
             LockedPageManager::instance.LockRange(p, sizeof(T) * n);
         return p;
@@ -244,10 +244,10 @@ struct zero_after_free_allocator : public std::allocator<T>
     typedef std::allocator<T> base;
     typedef typename base::size_type size_type;
     typedef typename base::difference_type  difference_type;
-    typedef typename base::pointer pointer;
-    typedef typename base::const_pointer const_pointer;
-    typedef typename base::reference reference;
-    typedef typename base::const_reference const_reference;
+    typedef T* pointer;
+    typedef const T* const_pointer;
+    typedef T& reference;
+    typedef const T& const_reference;
     typedef typename base::value_type value_type;
     zero_after_free_allocator() throw() {}
     zero_after_free_allocator(const zero_after_free_allocator& a) throw() : base(a) {}
