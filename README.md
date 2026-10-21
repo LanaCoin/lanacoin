@@ -47,8 +47,8 @@ Estimated coins in existence after end of pow 4.068.900.000 (very very rough est
 
 LanaCoin switches to quantum safe ML-DSA-44 signatures (NIST FIPS 204):
 
-* **7 May 2027 06:39 GMT+2** (block time 1809664740): post-quantum hard fork. New outputs must go to post-quantum addresses (`LQ...`), blocks are signed with ML-DSA-44. All nodes and wallets must be upgraded before this date.
-* **7 May 2028 06:39 GMT+2** (block time 1841287140): ECDSA sunset. Coins still on old (`L...`) addresses can no longer be moved. Staking or sending the coins to an own new address before this date moves them to a post-quantum address.
+* **7 May 2028 06:39 GMT+2** (block time 1841287140): post-quantum hard fork. New outputs must go to post-quantum addresses (`LQ...`), blocks are signed with ML-DSA-44. All nodes and wallets must be upgraded before this date.
+* **7 May 2029 06:39 GMT+2** (block time 1872823140): ECDSA sunset. Coins still on old (`L...`) addresses can no longer be moved. Staking or sending the coins to an own new address before this date moves them to a post-quantum address.
 
 Details for users, exchanges and developers: [doc/pq-hardfork.md](doc/pq-hardfork.md)
 

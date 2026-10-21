@@ -97,11 +97,11 @@ public:
 
         nLastPOWBlock = 750000;
 
-        // Post-quantum hard fork: 7 May 2027 06:39 GMT+2, Lana's birthday.
+        // Post-quantum hard fork: 7 May 2028 06:39 GMT+2, Lana's birthday.
         // From then on new outputs must be post-quantum (ML-DSA-44); ECDSA
-        // signatures stop being valid one year later, 7 May 2028 06:39 GMT+2.
-        nPQForkTime = 1809664740;       // 2027-05-07 04:39:00 UTC
-        nECDSASunsetTime = 1841287140;  // 2028-05-07 04:39:00 UTC
+        // signatures stop being valid one year later, 7 May 2029 06:39 GMT+2.
+        nPQForkTime = 1841287140;       // 2028-05-07 04:39:00 UTC
+        nECDSASunsetTime = 1872823140;  // 2029-05-07 04:39:00 UTC
 
         base58Prefixes[PQ_PUBKEY_ADDRESS] = boost::assign::list_of(131)(46).convert_to_container<std::vector<unsigned char> >();  // "LQ..."
         base58Prefixes[PQ_SCRIPT_ADDRESS] = boost::assign::list_of(131)(105).convert_to_container<std::vector<unsigned char> >(); // "LS..."
@@ -163,8 +163,8 @@ public:
         nLastPOWBlock = 0x7fffffff;
 
         // Testnet goes through the whole post-quantum transition before mainnet
-        nPQForkTime = 1801978740;       // 2027-02-07 05:39:00 UTC
-        nECDSASunsetTime = 1807072740;  // 2027-04-07 04:39:00 UTC
+        nPQForkTime = 1833514740;       // 2028-02-07 05:39:00 UTC
+        nECDSASunsetTime = 1838695140;  // 2028-04-07 04:39:00 UTC
 
         base58Prefixes[PQ_PUBKEY_ADDRESS] = boost::assign::list_of(178)(128).convert_to_container<std::vector<unsigned char> >(); // "TQ..."
         base58Prefixes[PQ_SCRIPT_ADDRESS] = boost::assign::list_of(178)(187).convert_to_container<std::vector<unsigned char> >(); // "TS..."

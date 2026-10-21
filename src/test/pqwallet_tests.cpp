@@ -18,7 +18,7 @@ extern CWallet* pwalletMain;
 struct PQForkTimes
 {
     PQForkTimes(int64_t nFork, int64_t nSunset) { ModifiableParams().SetPQForkTimes(nFork, nSunset); }
-    ~PQForkTimes() { ModifiableParams().SetPQForkTimes(1809664740, 1841287140); }
+    ~PQForkTimes() { ModifiableParams().SetPQForkTimes(1841287140, 1872823140); }
 };
 
 static CScript ScriptFor(const CTxDestination& dest)

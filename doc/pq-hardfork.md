@@ -20,8 +20,8 @@ by block height:
 
 | Network | Post-quantum fork                    | ECDSA sunset                         |
 |---------|--------------------------------------|--------------------------------------|
-| Mainnet | 7 May 2027 06:39 GMT+2 (1809664740)  | 7 May 2028 06:39 GMT+2 (1841287140)  |
-| Testnet | 7 Feb 2027 06:39 GMT+1 (1801978740)  | 7 Apr 2027 06:39 GMT+2 (1807072740)  |
+| Mainnet | 7 May 2028 06:39 GMT+2 (1841287140)  | 7 May 2029 06:39 GMT+2 (1872823140)  |
+| Testnet | 7 Feb 2028 06:39 GMT+1 (1833514740)  | 7 Apr 2028 06:39 GMT+2 (1838695140)  |
 
 7 May 06:39 is the time of Lana's birthday used for the genesis block.
 Testnet goes through both steps before the mainnet fork. On testnet and
@@ -34,7 +34,7 @@ the dates for testing; on mainnet they are fixed.
 What changes
 ------------
 
-### Before the fork (now until 7 May 2027)
+### Before the fork (now until 7 May 2028)
 
 Nothing changes on the network. Upgraded wallets already create post-quantum
 keys in the background (the post-quantum key pool), so wallet backups made
@@ -43,7 +43,7 @@ created (`getnewaddress "" postquantum`) but **can not receive coins yet**:
 such outputs could not be spent before the fork, so wallets refuse to send to
 them and nodes do not relay them.
 
-### From the fork (7 May 2027)
+### From the fork (7 May 2028)
 
 * **New outputs must be quantum safe.** A transaction or block that creates
   an output to an ECDSA address (`L...`), a pay-to-pubkey or an old P2SH
@@ -59,22 +59,22 @@ them and nodes do not relay them.
   quantum safe addresses by staking alone.
 * New addresses in the wallet (GUI and RPC) are post-quantum.
 
-### From the ECDSA sunset (7 May 2028)
+### From the ECDSA sunset (7 May 2029)
 
 ECDSA signatures are no longer valid (`OP_CHECKSIG`, `OP_CHECKSIGVERIFY`,
 `OP_CHECKMULTISIG`, `OP_CHECKMULTISIGVERIFY` fail, also for the stake kernel).
 **Coins that are still on ECDSA addresses then can not be moved any more.**
-Everybody has to move their coins before 7 May 2028 — by sending them to a
+Everybody has to move their coins before 7 May 2029 — by sending them to a
 post-quantum address of their own, or simply by staking.
 
 What users have to do
 ---------------------
 
-1. Upgrade the wallet before 7 May 2027 and make a new wallet backup after
+1. Upgrade the wallet before 7 May 2028 and make a new wallet backup after
    upgrading (it then contains the post-quantum key pool).
 2. After the fork, keep the wallet staking, or send the coins to a new
    address of your own (`getnewaddress` returns a post-quantum address).
-   This must be done before 7 May 2028.
+   This must be done before 7 May 2029.
 3. Make a new backup after you used about 100 new addresses (as before).
 
 Exchanges and services

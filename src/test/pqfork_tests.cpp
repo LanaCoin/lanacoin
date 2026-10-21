@@ -68,23 +68,23 @@ BOOST_AUTO_TEST_SUITE(pqfork_tests)
 
 BOOST_AUTO_TEST_CASE(pqfork_activation_times)
 {
-    // Mainnet: 7 May 2027 06:39 GMT+2, ECDSA sunset one year later
+    // Mainnet: 7 May 2028 06:39 GMT+2, ECDSA sunset one year later
     SelectParams(CChainParams::MAIN);
-    BOOST_CHECK_EQUAL(Params().PQForkTime(), 1809664740);
-    BOOST_CHECK_EQUAL(Params().ECDSASunsetTime(), 1841287140);
+    BOOST_CHECK_EQUAL(Params().PQForkTime(), 1841287140);
+    BOOST_CHECK_EQUAL(Params().ECDSASunsetTime(), 1872823140);
     BOOST_CHECK(!IsPQForkActive(1809664739));
-    BOOST_CHECK(IsPQForkActive(1809664740));
+    BOOST_CHECK(IsPQForkActive(1841287140));
     BOOST_CHECK(!IsECDSASunset(1841287139));
-    BOOST_CHECK(IsECDSASunset(1841287140));
+    BOOST_CHECK(IsECDSASunset(1872823140));
 
     BOOST_CHECK_EQUAL(GetPQScriptFlags(1809664739), 0U);
-    BOOST_CHECK_EQUAL(GetPQScriptFlags(1809664740), (unsigned int)SCRIPT_VERIFY_PQ);
-    BOOST_CHECK_EQUAL(GetPQScriptFlags(1841287140), (unsigned int)(SCRIPT_VERIFY_PQ | SCRIPT_VERIFY_NO_ECDSA));
+    BOOST_CHECK_EQUAL(GetPQScriptFlags(1841287140), (unsigned int)SCRIPT_VERIFY_PQ);
+    BOOST_CHECK_EQUAL(GetPQScriptFlags(1872823140), (unsigned int)(SCRIPT_VERIFY_PQ | SCRIPT_VERIFY_NO_ECDSA));
 
     // Testnet goes through the transition before mainnet
     SelectParams(CChainParams::TESTNET);
     BOOST_CHECK(Params().PQForkTime() < Params().ECDSASunsetTime());
-    BOOST_CHECK(Params().ECDSASunsetTime() < 1809664740);
+    BOOST_CHECK(Params().ECDSASunsetTime() < 1841287140);
     SelectParams(CChainParams::MAIN);
 }
 
