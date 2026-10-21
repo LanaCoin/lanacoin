@@ -1,0 +1,91 @@
+name: Windows Qt wallet
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lanacoin-qt-windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-qt6-5compat
+            mingw-w64-ucrt-x86_64-qt6-svg
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-db
+            mingw-w64-ucrt-x86_64-zlib
+
+      - name: Detect library names
+        run: |
+          ls /ucrt64/lib | grep -E '^lib(boost_(system|filesystem|program_options|thread|chrono)|db_cxx)' || true
+          # Boost: libboost_<name>-mt.a; Boost.System is header only in new versions
+          if ls /ucrt64/lib/libboost_system-mt.* >/dev/null 2>&1; then echo "NO_BOOST_SYSTEM=0" >> "$GITHUB_ENV"; else echo "NO_BOOST_SYSTEM=1" >> "$GITHUB_ENV"; fi
+          # Berkeley DB: libdb_cxx.a or libdb_cxx-<version>.a
+          BDB=$(ls /ucrt64/lib | sed -n 's/^libdb_cxx\(-[0-9.]*\)\{0,1\}\.dll\.a$/\1/p' | head -n 1)
+          echo "BDB_LIB_SUFFIX=$BDB" >> "$GITHUB_ENV"
+          echo "BDB suffix: '$BDB'"
+
+      - name: Build lanacoin-qt
+        run: |
+          mkdir build
+          cd build
+          qmake6 ../lanacoin-qt.pro \
+            CONFIG+=release \
+            USE_UPNP=- \
+            BOOST_LIB_SUFFIX=-mt \
+            BOOST_THREAD_LIB_SUFFIX=-mt \
+            NO_BOOST_SYSTEM=$NO_BOOST_SYSTEM \
+            BDB_LIB_SUFFIX=$BDB_LIB_SUFFIX \
+            MINGW_THREAD_BUGFIX=0
+          mingw32-make -j"$(nproc)"
+
+      - name: Package
+        run: |
+          mkdir -p dist/LanaCoin
+          EXE=$(find build -name lanacoin-qt.exe | head -n 1)
+          cp "$EXE" dist/LanaCoin/
+          # Qt runtime (platform plugin, styles, translations)
+          windeployqt6 --release --no-compiler-runtime dist/LanaCoin/lanacoin-qt.exe
+          # All other DLLs the program uses from the MSYS2 environment
+          for i in 1 2 3; do
+            for f in dist/LanaCoin/*.exe dist/LanaCoin/*.dll; do
+              ldd "$f" | awk '{print $3}' | grep -i '^/ucrt64/' || true
+            done | sort -u | while read -r dll; do
+              cp -n "$dll" dist/LanaCoin/ || true
+            done
+          done
+          cp COPYING dist/LanaCoin/COPYING.txt
+          cp doc/pq-hardfork.md dist/LanaCoin/
+          ls dist/LanaCoin
+          cd dist && zip -r ../lanacoin-qt-windows-x64.zip LanaCoin
+
+      - name: Check DLL dependencies
+        run: |
+          # Every DLL must be in the package or part of Windows itself
+          cd dist/LanaCoin
+          ldd lanacoin-qt.exe
+          if ldd lanacoin-qt.exe | grep -iE 'not found|/ucrt64/'; then
+            echo "missing DLLs in the package"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanacoin-qt-windows-x64
+          path: lanacoin-qt-windows-x64.zip
