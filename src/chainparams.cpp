@@ -11,6 +11,8 @@
 
 #include <boost/assign/list_of.hpp>
 
+using namespace std;
+
 using namespace boost::assign;
 
 struct SeedSpec6 {
